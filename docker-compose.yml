@@ -1,0 +1,99 @@
+# =============================================================================
+# automation-hub — self-hosted n8n behind Caddy (automatic HTTPS)
+# =============================================================================
+# - n8n stays on the internal Docker network only (port 5678 is NEVER published).
+# - Caddy terminates TLS, fetches/renews Let's Encrypt certs automatically, and
+#   reverse-proxies to n8n. Only 80/443 are exposed to the internet.
+# - Database: SQLite (n8n default) persisted in the `n8n_data` volume. No Postgres.
+# - All configuration comes from `.env` (copy `.env.example` -> `.env`).
+# =============================================================================
+
+services:
+  caddy:
+    image: caddy:${CADDY_IMAGE_TAG:-2-alpine}
+    container_name: automation-hub-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC)
+    environment:
+      # Consumed by the Caddyfile via {$DOMAIN}.
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates + ACME account (must persist!)
+      - caddy_config:/config
+    networks:
+      - automation-hub
+    depends_on:
+      n8n:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:${N8N_IMAGE_TAG:-2.31.4}
+    container_name: automation-hub-n8n
+    restart: unless-stopped
+    # Reachable only inside the Docker network. `expose` documents the port;
+    # it is deliberately NOT mapped to the host.
+    expose:
+      - "5678"
+    environment:
+      # --- Public URL / reverse-proxy awareness ---------------------------
+      N8N_HOST: ${DOMAIN}
+      N8N_PROTOCOL: https
+      N8N_PORT: "5678"
+      WEBHOOK_URL: https://${DOMAIN}/
+      N8N_EDITOR_BASE_URL: https://${DOMAIN}/
+      # n8n sits behind exactly one proxy hop (Caddy) -> trust its X-Forwarded-*.
+      N8N_PROXY_HOPS: "1"
+
+      # --- Locale / time --------------------------------------------------
+      GENERIC_TIMEZONE: Europe/Berlin
+      TZ: Europe/Berlin
+
+      # --- Security -------------------------------------------------------
+      # Encrypts stored credentials at rest. Generate with: openssl rand -hex 32
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      # --- Public REST API (used by scripts/deploy.ts) --------------------
+      N8N_PUBLIC_API_DISABLED: "false"
+
+      # --- Task runner (Code node execution) ------------------------------
+      # GA in n8n v2; internal mode needs no extra container.
+      N8N_RUNNERS_ENABLED: "true"
+
+      # --- Workflow-visible configuration ---------------------------------
+      # Allow the Code node / expressions to read these via $env.*.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      CALENDAR_ID: ${CALENDAR_ID}
+      SHOW_BIRTH_YEAR: ${SHOW_BIRTH_YEAR}
+      # Passed for reference; the active schedule is injected into the Schedule
+      # Trigger by scripts/deploy.ts from BIRTHDAY_SYNC_SCHEDULE.
+      BIRTHDAY_SYNC_SCHEDULE: ${BIRTHDAY_SYNC_SCHEDULE}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - automation-hub
+    healthcheck:
+      # `node` is always present in the n8n image; avoids depending on curl/wget.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:5678/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  n8n_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  automation-hub:
+    driver: bridge

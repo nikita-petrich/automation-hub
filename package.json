@@ -1,0 +1,20 @@
+{
+  "name": "automation-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted n8n automation hub. The repository is the single source of truth; deployment is one-way (repo -> n8n).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "deploy": "tsx scripts/deploy.ts",
+    "backup": "tsx scripts/backup.ts",
+    "validate": "tsx scripts/validate.ts",
+    "sync": "tsx scripts/validate.ts --fix",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2"
+  }
+}

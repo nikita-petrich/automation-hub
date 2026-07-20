@@ -1,0 +1,30 @@
+# Validation only — NO deploy, NO SSH, NO secrets required.
+# Parses/validates every workflow JSON, verifies the Code node is in sync with
+# lib/, and runs the lib unit tests. Deployment to n8n is a deliberate manual
+# step (scripts/deploy.ts), never done from CI.
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Validate workflows (JSON, schema, lib sync)
+        run: npm run validate
+
+      - name: Run unit tests
+        run: npm test

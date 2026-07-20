@@ -1,0 +1,366 @@
+{
+  "id": "birthday-sync",
+  "name": "Birthday Sync (Contacts → Calendar)",
+  "active": true,
+  "nodes": [
+    {
+      "id": "trigger-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -40,
+        220
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        420
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "list-managed-events",
+      "name": "List Managed Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/{{ encodeURIComponent($env.CALENDAR_ID) }}/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "privateExtendedProperty",
+              "value": "managedBy=birthday-sync"
+            },
+            {
+              "name": "singleEvents",
+              "value": "false"
+            },
+            {
+              "name": "showDeleted",
+              "value": "false"
+            },
+            {
+              "name": "maxResults",
+              "value": "2500"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}",
+              "limitPagesFetched": true,
+              "maxRequestsFetched": 50
+            }
+          }
+        }
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "Google OAuth2 (automation-hub)"
+        }
+      }
+    },
+    {
+      "id": "list-contacts",
+      "name": "List Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://people.googleapis.com/v1/people/me/connections",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "personFields",
+              "value": "names,birthdays"
+            },
+            {
+              "name": "pageSize",
+              "value": "1000"
+            }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "pageToken",
+                    "value": "={{ $response.body.nextPageToken }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.nextPageToken }}",
+              "limitPagesFetched": true,
+              "maxRequestsFetched": 50
+            }
+          }
+        }
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "Google OAuth2 (automation-hub)"
+        }
+      }
+    },
+    {
+      "id": "plan-operations",
+      "name": "Plan Operations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// This Code node is generated from lib/calendar-upsert.js.\n// The region between LIB:START and LIB:END is kept in sync by `npm run sync`\n// and re-injected at deploy time by scripts/deploy.ts.\n// Edit the business logic in lib/calendar-upsert.js, NOT here.\n\n// LIB:START\n/**\n * Small, dependency-free FNV-1a hash -> 8-char hex string.\n * Used to build a stable content signature for change detection.\n */\nfunction hashString(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    // h *= 16777619 (FNV prime), kept in 32-bit unsigned range.\n    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;\n  }\n  return ('0000000' + h.toString(16)).slice(-8);\n}\n\nfunction pad2(n) {\n  return n < 10 ? '0' + n : '' + n;\n}\n\n/**\n * Flatten People API `connections.list` response pages into normalized\n * contacts that actually have a usable birthday.\n * Returns: [{ resourceName, displayName, day, month, year|null }]\n * `year` is null when the birthday has no year (very common in Contacts).\n */\nfunction normalizeContacts(pages) {\n  const out = [];\n  for (const page of pages || []) {\n    const connections = (page && page.connections) || [];\n    for (const person of connections) {\n      const resourceName = person && person.resourceName;\n      if (!resourceName) continue;\n\n      // Pick the first birthday entry that carries a structured month + day.\n      let date = null;\n      for (const b of person.birthdays || []) {\n        if (b && b.date && b.date.month && b.date.day) {\n          date = b.date;\n          break;\n        }\n      }\n      if (!date) continue; // no usable birthday -> skip this contact\n\n      const names = person.names || [];\n      const primary = names.find((n) => n.metadata && n.metadata.primary) || names[0];\n      const displayName =\n        primary && primary.displayName ? String(primary.displayName).trim() : 'Unknown';\n\n      out.push({\n        resourceName,\n        displayName: displayName || 'Unknown',\n        day: date.day,\n        month: date.month,\n        year: date.year || null,\n      });\n    }\n  }\n  return out;\n}\n\n/**\n * Index existing managed events (Calendar `events.list` pages) by contactId,\n * so the planner can match a contact to its event in O(1).\n */\nfunction indexExistingEvents(pages) {\n  const map = {};\n  for (const page of pages || []) {\n    const items = (page && page.items) || [];\n    for (const ev of items) {\n      const priv = ev && ev.extendedProperties && ev.extendedProperties.private;\n      if (priv && priv.contactId) map[priv.contactId] = ev;\n    }\n  }\n  return map;\n}\n\n/**\n * Age the person turns on their NEXT birthday relative to `now`.\n * Returns null when the birth year is unknown.\n */\nfunction ageOnNextBirthday(contact, now) {\n  if (!contact.year) return null;\n  const y = now.getUTCFullYear();\n  const m = now.getUTCMonth() + 1;\n  const d = now.getUTCDate();\n  const alreadyPassed = contact.month < m || (contact.month === m && contact.day < d);\n  const nextYear = alreadyPassed ? y + 1 : y;\n  return nextYear - contact.year;\n}\n\n/**\n * Build the event title. When SHOW_BIRTH_YEAR is on and a birth year exists,\n * append the age reached on the upcoming birthday, e.g. \"🎂 Anna (turning 40)\".\n * The daily sweep refreshes this so the age stays correct year to year.\n */\nfunction buildSummary(contact, opts) {\n  const base = '🎂 ' + contact.displayName;\n  if (opts.showBirthYear && contact.year) {\n    const age = ageOnNextBirthday(contact, opts.now);\n    if (age !== null && age >= 0) return base + ' (turning ' + age + ')';\n  }\n  return base;\n}\n\n/**\n * Build the desired Google Calendar event resource for a contact.\n * Returns the event body plus an internal `_sig` used for change detection\n * (the caller strips `_sig` before sending it to the API).\n */\nfunction buildDesiredEvent(contact, opts) {\n  // Anchor year = birth year when known (series then literally starts at birth),\n  // otherwise the current year. Feb 29 with an unknown year is anchored to a\n  // known leap year so the start date is valid.\n  let anchorYear = contact.year || opts.now.getUTCFullYear();\n  if (!contact.year && contact.month === 2 && contact.day === 29) anchorYear = 2000;\n\n  const startDate = anchorYear + '-' + pad2(contact.month) + '-' + pad2(contact.day);\n  // All-day events use an exclusive end date -> the following day.\n  const endObj = new Date(Date.UTC(anchorYear, contact.month - 1, contact.day + 1));\n  const endDate =\n    endObj.getUTCFullYear() +\n    '-' +\n    pad2(endObj.getUTCMonth() + 1) +\n    '-' +\n    pad2(endObj.getUTCDate());\n\n  const summary = buildSummary(contact, opts);\n  const sig = hashString(\n    [contact.displayName, contact.month, contact.day, contact.year || '', summary].join('|')\n  );\n\n  return {\n    summary,\n    start: { date: startDate },\n    end: { date: endDate },\n    recurrence: ['RRULE:FREQ=YEARLY'],\n    transparency: 'transparent', // do not block \"busy\" time\n    reminders: { useDefault: true }, // inherit the target calendar's reminders\n    extendedProperties: {\n      private: {\n        managedBy: 'birthday-sync',\n        contactId: contact.resourceName,\n        sig: sig,\n      },\n    },\n    _sig: sig,\n  };\n}\n\n/**\n * Decide create / update / skip for one contact given the existing event map.\n * Produces a ready-to-execute operation descriptor (method + url + body).\n */\nfunction decideOperation(contact, existingMap, opts) {\n  const desired = buildDesiredEvent(contact, opts);\n  const sig = desired._sig;\n  delete desired._sig;\n\n  const enc = encodeURIComponent(opts.calendarId);\n  const base = 'https://www.googleapis.com/calendar/v3/calendars/' + enc + '/events';\n  const existing = existingMap[contact.resourceName];\n\n  if (!existing) {\n    return {\n      action: 'create',\n      method: 'POST',\n      url: base,\n      body: desired,\n      contactId: contact.resourceName,\n      summary: desired.summary,\n    };\n  }\n\n  const existingSig =\n    existing.extendedProperties && existing.extendedProperties.private\n      ? existing.extendedProperties.private.sig\n      : null;\n\n  if (existingSig !== sig) {\n    return {\n      action: 'update',\n      method: 'PATCH',\n      url: base + '/' + encodeURIComponent(existing.id),\n      body: desired,\n      eventId: existing.id,\n      contactId: contact.resourceName,\n      summary: desired.summary,\n    };\n  }\n\n  return {\n    action: 'skip',\n    contactId: contact.resourceName,\n    summary: desired.summary,\n    eventId: existing.id,\n  };\n}\n\n/**\n * Plan operations for every contact. The caller typically filters out\n * `skip` operations before routing create/update to the Calendar API.\n */\nfunction planOperations(contacts, existingMap, opts) {\n  const ops = [];\n  for (const c of contacts) ops.push(decideOperation(c, existingMap, opts));\n  return ops;\n}\n// LIB:END\n\n// ---- n8n glue -------------------------------------------------------------\nconst CALENDAR_ID = String($env.CALENDAR_ID || '').trim();\nif (!CALENDAR_ID) {\n  throw new Error('CALENDAR_ID is not set on the n8n container. Add it to .env and recreate the stack.');\n}\nconst showBirthYear = String($env.SHOW_BIRTH_YEAR ?? 'true').toLowerCase() === 'true';\nconst now = new Date();\n\nconst contactPages = $input.all().map((i) => i.json);\nconst eventPages = $('List Managed Events').all().map((i) => i.json);\n\nconst contacts = normalizeContacts(contactPages);\nconst existing = indexExistingEvents(eventPages);\nconst ops = planOperations(contacts, existing, { calendarId: CALENDAR_ID, showBirthYear, now });\n\n// Drop no-op (skip) operations so downstream only creates/updates.\nreturn ops.filter((op) => op.action !== 'skip').map((json) => ({ json }));"
+      }
+    },
+    {
+      "id": "route-by-action",
+      "name": "Route by Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        920,
+        320
+      ],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "create",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "create"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "update",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "update"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "create-event",
+      "name": "Create Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "Google OAuth2 (automation-hub)"
+        }
+      }
+    },
+    {
+      "id": "update-event",
+      "name": "Update Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        440
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "credentials": {
+        "oAuth2Api": {
+          "id": "REPLACE_WITH_CRED_ID",
+          "name": "Google OAuth2 (automation-hub)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Managed Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Managed Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Managed Events": {
+      "main": [
+        [
+          {
+            "node": "List Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Contacts": {
+      "main": [
+        [
+          {
+            "node": "Plan Operations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Operations": {
+      "main": [
+        [
+          {
+            "node": "Route by Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Action": {
+      "main": [
+        [
+          {
+            "node": "Create Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}
