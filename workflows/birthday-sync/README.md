@@ -110,13 +110,26 @@ n8n can reach `N8N_ENCRYPTION_KEY`. Change a value → re-run the deploy.
 
 - **No birth year** (very common) → event still created; anchored to the current
   year; no age suffix.
-- **Feb 29 with unknown year** → anchored to a leap year (2000) so the start date
-  is valid.
+- **Feb 29** → the series is anchored to a leap year, so `start.date` is always a
+  real date. That covers an unknown birth year *and* a known one that isn't a
+  leap year (bad contact data). The age in the title still uses the real year.
+- **Impossible dates** (`month: 13`, April 31, Feb 30) → contact skipped, rather
+  than sending an invalid `start.date` that the Calendar API answers with a 400.
+- **The same contact seen twice** → de-duplicated by `resourceName`. Matters
+  because the idempotency check runs against the *calendar*: two copies of a
+  contact that has no event yet would otherwise plan two `create`s.
 - **Contacts without a usable birthday** → skipped.
 - **Contacts with multiple birthday entries** → the first with a structured
   month+day is used.
 - **> 1000 contacts / > 2500 events** → both list nodes paginate on
-  `nextPageToken`.
+  `nextPageToken`. `List Contacts` is marked `executeOnce`, so a multi-page
+  event list can't make it run (and fan out) more than once.
+- **A transient Google error** (429/5xx) → every HTTP node retries 3× with 5 s
+  in between. If it still fails the run stops and shows red in the execution
+  list; since the sync is idempotent, the next daily run picks up where it left
+  off. There is deliberately no "continue on error" — that would turn a partial
+  sync into a green run. Note there is no *notification* yet: a failure is only
+  visible in the n8n UI.
 
 ## Not handled (by design)
 

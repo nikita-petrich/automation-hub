@@ -39,6 +39,12 @@ on:
       - ".github/workflows/deploy.yml"
   workflow_dispatch: {}
 
+# The deploy reads the repo and pushes to the VPS over SSH; it never writes back
+# to GitHub. Without an explicit block the token inherits the repository default,
+# which may include write scopes.
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-vps
   cancel-in-progress: false
@@ -46,6 +52,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,6 +65,9 @@ jobs:
   deploy:
     needs: validate
     runs-on: ubuntu-latest
+    # A hung SSH call would otherwise sit in the `deploy-vps` concurrency group
+    # for GitHub's 6h default and block every later deploy behind it.
+    timeout-minutes: 15
     environment: production
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}

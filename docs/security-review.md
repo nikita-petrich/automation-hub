@@ -24,9 +24,16 @@ Die Probleme liegen fast alle in der **Kette Runner → VPS** und in der
 Keine akut ausgenutzte Lücke gefunden. Drei Punkte sollten aber vor dem
 nächsten Deploy adressiert werden (H1–H3).
 
-> **Stand heute: H1, H2 und H3 sind behoben und live.** Die Details stehen als
-> Status-Block beim jeweiligen Befund. Offen sind noch M1–M6, N1–N7 und I1–I8;
-> die empfohlene Reihenfolge dafür steht am Ende des Dokuments.
+> **Stand heute:** H1–H3 sind behoben und live; ebenso M4, N2 und N3, sowie
+> M1 und M5 teilweise. Details stehen als Status-Block beim jeweiligen Befund.
+> Offen sind **M2** (`/api/v1` am Proxy sperren), **M3** (2FA bzw. eine
+> vorgelagerte Authentifizierung), **M6**, N1, N4–N7 und I1–I8 — plus der
+> Benachrichtigungs-Teil von M5. Die empfohlene Reihenfolge steht am Ende.
+>
+> M2 und M3 sind die beiden verbliebenen Punkte mit echtem Sicherheitswert, und
+> beide liegen **außerhalb dieses Repos** (Reverse-Proxy-Konfiguration bzw.
+> n8n-Account). Eine Basic-Auth vor dem gesamten Vhost erschlägt beide auf
+> einmal.
 
 ---
 
@@ -37,15 +44,15 @@ nächsten Deploy adressiert werden (H1–H3).
 | H1 | ~~Hoch~~ **behoben** | Container | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` gibt Code-Nodes Zugriff auf das gesamte Prozess-Env inkl. `N8N_ENCRYPTION_KEY` |
 | H2 | ~~Hoch~~ **behoben** | Supply Chain | Kein `package-lock.json`; `npm install` mit Lifecycle-Scripts im Job, der *alle* Prod-Secrets hält |
 | H3 | ~~Hoch~~ **behoben** | CI/CD | `ssh-keyscan` ohne Host-Key-Pinning — MITM bekommt `.env` (Encryption Key + API Key) frei Haus |
-| M1 | Mittel | CI/CD | Kein `permissions:`-Block, Actions auf mutable Tags gepinnt |
+| M1 | ~~Mittel~~ **teilweise** | CI/CD | Kein `permissions:`-Block, Actions auf mutable Tags gepinnt |
 | M2 | Mittel | Exposure | n8n Public API (`/api/v1`) und `/rest` sind öffentlich erreichbar, obwohl nichts sie braucht |
 | M3 | Mittel | Betrieb | Owner-Claim-Fenster: Instanz ist online, bevor der Admin-Account existiert |
-| M4 | Mittel | Workflow | Latenter Fan-out-Bug: `List Contacts` läuft einmal *pro Item* von `List Managed Events` |
-| M5 | Mittel | Workflow | Keine Fehlerbehandlung/Retry an den HTTP-Nodes, kein Error-Workflow |
+| M4 | ~~Mittel~~ **behoben** | Workflow | Latenter Fan-out-Bug: `List Contacts` läuft einmal *pro Item* von `List Managed Events` |
+| M5 | ~~Mittel~~ **teilweise** | Workflow | Keine Fehlerbehandlung/Retry an den HTTP-Nodes, kein Error-Workflow |
 | M6 | Mittel | Datenschutz | Execution-Daten speichern 14 Tage lang alle Kontaktnamen + Geburtsdaten |
 | N1 | Niedrig | CI/CD | `.env` auf dem VPS hat ein Permission-Fenster; Secrets landen in Runner-Tempfile |
-| N2 | Niedrig | Logik | 29.02. mit *bekanntem* Nicht-Schaltjahr erzeugt ungültiges Datum → API-400 |
-| N3 | Niedrig | Tooling | `validate.ts` meldet `await` als Syntaxfehler, obwohl n8n es erlaubt |
+| N2 | ~~Niedrig~~ **behoben** | Logik | 29.02. mit *bekanntem* Nicht-Schaltjahr erzeugt ungültiges Datum → API-400 |
+| N3 | ~~Niedrig~~ **behoben** | Tooling | `validate.ts` meldet `await` als Syntaxfehler, obwohl n8n es erlaubt |
 | N4 | Niedrig | Container | Keine Container-Härtung: kein `no-new-privileges`, keine Log-Rotation, kein Digest-Pinning |
 | N5 | Niedrig | CI/CD | tar-Deploy löscht entfernte Dateien nie → Drift auf dem VPS |
 | N6 | Niedrig | CI/CD | Deploy-Gate ist schwächer als das PR-Gate (`npm test` fehlt); SSH-Tunnel-Cleanup fragil |
@@ -194,6 +201,15 @@ ssh-keyscan -p 22 <vps-host>      # Ausgabe als Secret VPS_SSH_HOST_KEY ablegen
 
 ### M1 — Workflow-Permissions und Action-Pinning
 
+> **Status: teilweise behoben.** Beide Workflows haben jetzt
+> `permissions: contents: read` auf Datei-Ebene sowie `timeout-minutes`
+> (10 für die Validate-Jobs, 15 für den Deploy — ein hängender SSH-Call
+> blockierte sonst die `deploy-vps`-Concurrency-Gruppe bis zum 6-h-Default).
+> **Bewusst nicht gemacht:** SHA-Pinning der Actions — bei First-Party-Actions
+> von GitHub steht der Nutzen in keinem Verhältnis zum Wartungsaufwand ohne
+> Dependabot. *Required reviewers* auf dem `production`-Environment bleibt
+> ebenfalls offen; das ist eine Repo-Einstellung, keine Code-Änderung.
+
 Beide Workflows haben keinen `permissions:`-Block; es gilt die
 Repo-Default-Berechtigung des `GITHUB_TOKEN` (je nach Einstellung
 read **oder write**). Für Jobs, die nichts ins Repo schreiben, gehört an den
@@ -245,6 +261,14 @@ am Proxy schützen. Danach unbedingt 2FA im n8n-Account aktivieren.
 
 ### M4 — Fan-out: `List Contacts` läuft einmal pro Event-Page
 
+> **Status: behoben, doppelt abgesichert.** *List Contacts* hat
+> `"executeOnce": true` — der Fan-out kann nicht mehr entstehen. Zusätzlich
+> dedupliziert `normalizeContacts` jetzt über `resourceName`, weil derselbe
+> Kontakt auch ohne Fan-out doppelt in der People-API stehen kann und der
+> Idempotenz-Check nur gegen den *Kalender* läuft, nicht gegen die Kontaktliste.
+> Der zweite Teil ist der eigentlich wertvolle: er ist unit-getestet und hängt
+> nicht an der Node-Verdrahtung.
+
 In n8n führt ein HTTP-Request-Node **einmal pro Eingangs-Item** aus. Mit
 aktivierter Pagination gibt `List Managed Events`
 (`workflows/birthday-sync/workflow.json:38–99`) **ein Item pro Seite** aus.
@@ -263,6 +287,22 @@ Sauberer: beide List-Nodes direkt am Trigger parallel hängen, statt sie zu
 verketten.
 
 ### M5 — Keine Fehlerbehandlung an den HTTP-Nodes
+
+> **Status: teilweise behoben — Retries ja, Benachrichtigung nein.** Alle vier
+> HTTP-Nodes haben jetzt `retryOnFail` mit `maxTries: 3` und
+> `waitBetweenTries: 5000`. Damit überlebt der Lauf ein einzelnes 429/5xx.
+>
+> **Bewusst *nicht* umgesetzt: `onError: "continueRegularOutput"`.** Der Fix
+> oben empfiehlt es, aber ohne Error-Workflow macht es die Sache schlechter:
+> Der Lauf würde grün durchlaufen, während einzelne Events fehlen. So wie es
+> jetzt ist, bricht ein Fehler nach 3 Versuchen ab, die Execution steht rot in
+> der Liste, und weil der Workflow idempotent ist, holt der nächste Tageslauf
+> das Fehlende automatisch nach. Bei den beiden List-Nodes wäre Weiterlaufen
+> ohnehin gefährlich — unvollständige Event-Liste heißt Duplikate.
+>
+> **Weiterhin offen: die Benachrichtigung.** Ein Error-Workflow braucht einen
+> Kanal (Mail/Telegram/…), und der ist eine Entscheidung, keine Code-Änderung.
+> Bis dahin gilt: rote Executions sieht man nur in der n8n-UI.
 
 Keiner der vier HTTP-Nodes setzt `retryOnFail`, `onError` oder
 `alwaysOutputData`. Ein einzelnes 429/403/5xx von Google (Rate-Limit,
@@ -319,6 +359,14 @@ bleibt liegen (auf ephemeren Runnern unkritisch, auf self-hosted nicht).
 
 ### N2 — 29.02. mit bekanntem Nicht-Schaltjahr erzeugt ungültiges Datum
 
+> **Status: behoben.** Der Anker wird jetzt auf ein Schaltjahr korrigiert,
+> sobald das Zieljahr keins ist — unabhängig davon, ob das Geburtsjahr bekannt
+> ist. Das Alter im Titel kommt weiterhin aus dem *echten* Geburtsjahr, nicht
+> aus dem Anker. Zusätzlich prüft `normalizeContacts` jetzt `month`/`day` auf
+> Plausibilität (`isValidMonthDay`) und überspringt unmögliche Daten wie
+> `{month: 13}`, `{month: 4, day: 31}` oder `{month: 2, day: 30}`, statt dem
+> Kalender ein ungültiges `start.date` zu schicken. Drei neue Testfälle.
+
 `lib/calendar-upsert.js:138–139` fängt den Schalttag nur ab, wenn **kein**
 Geburtsjahr bekannt ist. Verifiziert:
 
@@ -337,6 +385,11 @@ Schaltjahr-Normalisierung — Kontakt sonst überspringen statt den Lauf zu
 sprengen — gehört in `normalizeContacts`, mitsamt zwei Testfällen.
 
 ### N3 — `validate.ts` meldet `await` fälschlich als Syntaxfehler
+
+> **Status: behoben.** Der Syntax-Check kompiliert Code-Node-Bodies jetzt als
+> **async** Function (`Object.getPrototypeOf(async function () {}).constructor`).
+> Gegengeprüft: `await Promise.resolve(1)` auf oberster Ebene wird akzeptiert,
+> während die alte `new Function`-Variante genau daran scheiterte.
 
 ```ts
 // scripts/validate.ts:152
@@ -519,7 +572,7 @@ Der Vollständigkeit halber, weil es die Bewertung der Befunde einordnet:
 | ~~1~~ | ✅ erledigt | **H3** Host-Key pinnen (`VPS_SSH_HOST_KEY`) |
 | ~~2~~ | ✅ erledigt | **H2** `package-lock.json` committen, `npm ci --ignore-scripts` |
 | ~~3~~ | ✅ erledigt | **H1** `CALENDAR_ID`/`SHOW_BIRTH_YEAR` deploy-time injizieren, Env-Zugriff blocken |
-| 4 | 5 min | **M6** Execution-Retention senken, **M1** `permissions: contents: read` |
+| 4 | 5 min | **M6** Execution-Retention senken _(M1 erledigt)_ |
 | 5 | 15 min | **M2** `/api/v1` am Proxy sperren, **M3** Doku + 2FA |
-| 6 | 20 min | **M4** `executeOnce`, **M5** Retry/`onError`, **N2** Datumsvalidierung |
-| 7 | Rest | N1, N3–N7, I1–I3 |
+| ~~6~~ | ✅ erledigt | **M4** `executeOnce`, **M5** Retry, **N2** Datumsvalidierung, **N3** `await` |
+| 7 | Rest | N1, N4–N7, I1–I3 + Error-Workflow für M5 |

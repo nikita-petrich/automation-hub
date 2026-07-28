@@ -28,6 +28,10 @@ const LIB_FILE = join(ROOT, 'lib', 'calendar-upsert.js');
 
 const FIX = process.argv.includes('--fix');
 
+// AsyncFunction isn't a global binding, but its constructor is reachable through
+// any async function's prototype. Used below to syntax-check Code node bodies.
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
 const problems: string[] = [];
 let fixedCount = 0;
 
@@ -163,10 +167,12 @@ function validateWorkflow(dir: string, libRegion: string): void {
       }
     }
     // Syntax check: compile with the n8n globals bound as parameters (never executed).
+    // Compiled as an ASYNC function, because n8n's Code node allows top-level
+    // `await` — a plain Function() would report valid code as a syntax error.
     const codeToCheck = FIX ? node.parameters.jsCode : jsCode;
     try {
       // eslint-disable-next-line no-new-func
-      new Function('$env', '$input', '$', '$json', 'items', codeToCheck);
+      new AsyncFunction('$env', '$input', '$', '$json', 'items', codeToCheck);
     } catch (e) {
       problems.push(`${label}: Code node "${node.name}" has a JS syntax error — ${(e as Error).message}`);
     }
