@@ -10,9 +10,16 @@ on:
   pull_request:
     branches: [main]
 
+# This job needs nothing but the code. Without an explicit block the token
+# inherits the repository default, which may include write scopes — a
+# compromised action step could then push to the repo.
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
