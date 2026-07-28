@@ -5,8 +5,9 @@
 #   2. copies the repo onto the VPS over SSH (tar stream),
 #   3. renders the VPS .env from the `production` Environment's secrets,
 #   4. starts the stack on the VPS (docker compose up -d via vps-deploy.sh),
-#   5. deploys the workflows into n8n from the runner via the public API
-#      (so the VPS needs only Docker — no Node, no rsync).
+#   5. deploys the workflows into n8n from the runner over an SSH tunnel to the
+#      VPS's loopback port (so the VPS needs only Docker — no Node, no rsync,
+#      and no dependency on the public TLS certificate).
 #
 # ALL configuration lives in the GitHub `production` Environment as SECRETS — you
 # never edit .env on the server by hand; the pipeline writes it from these:
@@ -124,9 +125,9 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "cd '$VPS_APP_DIR' && bash scripts/vps-deploy.sh"
 
-      - name: Deploy workflows into n8n (runner → public API)
+      - name: Deploy workflows into n8n (via SSH tunnel to the VPS)
         env:
-          N8N_API_URL: https://${{ secrets.DOMAIN }}
+          N8N_API_URL: http://127.0.0.1:5678
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
           GOOGLE_OAUTH_CRED_ID: ${{ secrets.GOOGLE_OAUTH_CRED_ID }}
           BIRTHDAY_SYNC_SCHEDULE: ${{ secrets.BIRTHDAY_SYNC_SCHEDULE }}
@@ -135,5 +136,12 @@ jobs:
             echo "N8N_API_KEY not set — n8n is up; add the secret and re-run to import workflows."
             exit 0
           fi
+          # Tunnel runner:5678 -> VPS 127.0.0.1:5678 (n8n's loopback-published port),
+          # so we reach the n8n API directly over SSH — independent of the public
+          # TLS certificate (Node would reject an untrusted/self-signed cert).
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" \
+            -o ExitOnForwardFailure=yes -f -N \
+            -L 127.0.0.1:5678:127.0.0.1:5678 "$VPS_USER@$VPS_HOST"
           npm install --no-audit --no-fund
           npm run deploy
+          pkill -f "ssh.*-L 127.0.0.1:5678:127.0.0.1:5678" || true
