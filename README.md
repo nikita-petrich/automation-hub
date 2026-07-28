@@ -17,6 +17,11 @@ Google Contacts into a dedicated Google Calendar as yearly all-day events —
 replacing the native Contacts→Calendar birthday sync that has been disabled in
 Germany since 2024 for regulatory reasons.
 
+> 🤖 **AI-first repository.** Changes here are made by **AI coding agents** through
+> pull requests — the code is not meant to be hand-edited. See **[AGENTS.md](AGENTS.md)**
+> for the rules and **[blueprint/](blueprint/)** for the spec-first workflow (adapted
+> from [ai-blueprint](https://github.com/bradtraversy/ai-blueprint)).
+
 ---
 
 ## Architecture
@@ -25,7 +30,7 @@ Germany since 2024 for regulatory reasons.
 |-----------|--------|-----|
 | Automation engine | **n8n** (Docker, pinned tag) | Visual workflows + code where needed. |
 | Database | **SQLite** (n8n default) | Zero-ops; fine for a single-instance hub. Persisted in a Docker volume. |
-| Reverse proxy / TLS | **your existing `nginx-auto-ssl` proxy** | Not part of this repo; n8n joins its shared Docker network and is routed by `SITES`. |
+| Reverse proxy / TLS | **your existing [`nginx-auto-ssl`](https://github.com/nikita-petrich/reverse-proxy) proxy** | Not part of this repo; n8n joins its shared Docker network and is routed by `SITES`. |
 | Network exposure | none public; `127.0.0.1:5678` loopback only | The proxy reaches n8n over the shared network; the loopback port is only for the on-host deploy. |
 | Config | **`.env`** (rendered from GitHub Environment in CI/CD) | No secrets in the repo. |
 | Deploy | **n8n Public REST API** (`scripts/deploy.ts`) | Idempotent upsert by workflow name; CLI fallback. |
@@ -36,6 +41,12 @@ Internet ─► your nginx-auto-ssl proxy ─(shared docker net)─► n8n:5678 
                                               127.0.0.1:5678 ──────┤ X-N8N-API-KEY
                                               scripts/deploy.ts (repo → n8n)
 ```
+
+> **Reverse proxy:** TLS termination and hostname routing are handled by a **separate
+> repo** — [`nikita-petrich/reverse-proxy`](https://github.com/nikita-petrich/reverse-proxy)
+> (an `nginx-auto-ssl` instance). n8n only joins that proxy's shared Docker network
+> (`PROXY_NETWORK`) and is reachable to it as `n8n:5678`; you add it to the proxy's
+> `SITES` (`<your-domain>=n8n:5678`). This repo ships no proxy of its own.
 
 ## Repository layout
 
@@ -125,6 +136,20 @@ All configuration lives in a GitHub **`production` Environment** (as secrets); t
 pipeline renders the VPS `.env` from it on every deploy. How the pipeline works is in
 **[docs/ci-cd.md](docs/ci-cd.md)**; the full from-scratch setup (VPS, proxy, DNS,
 Google, secrets) is in **[docs/manual-setup.md](docs/manual-setup.md)**.
+
+## AI-first development
+
+This repo is designed to be built and maintained by **AI agents**, not hand-edited.
+The human role is to set intent, review specs/diffs, and handle the few things an
+agent can't (secrets, Google OAuth consent, DNS). It uses a **spec-first loop**
+adapted from [ai-blueprint](https://github.com/bradtraversy/ai-blueprint):
+`plan → spec → implement (small diffs) → verify → complete → archive`.
+
+- **Rules for agents:** [AGENTS.md](AGENTS.md) (Claude Code also reads [CLAUDE.md](CLAUDE.md)).
+- **Framework & conventions:** [blueprint/](blueprint/) — `project-plan.md`,
+  `build-plan.md`, and `context/` (coding standards, agent behavior).
+- **Add a workflow:** run the `/new-workflow` skill, or follow
+  [blueprint/context/coding-standards.md](blueprint/context/coding-standards.md).
 
 ## Design decisions worth knowing
 
