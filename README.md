@@ -31,7 +31,7 @@ Germany since 2024 for regulatory reasons.
 | Deploy | **n8n Public REST API** (`scripts/deploy.ts`) | Idempotent upsert by workflow name; CLI fallback. |
 
 ```
-Internet ─► your nginx-auto-ssl proxy ─(shared docker net)─► automation-hub-n8n:5678 ─► SQLite volume
+Internet ─► your nginx-auto-ssl proxy ─(shared docker net)─► n8n:5678 ─► SQLite volume
              (TLS, SITES routing)                                 ▲
                                               127.0.0.1:5678 ──────┤ X-N8N-API-KEY
                                               scripts/deploy.ts (repo → n8n)

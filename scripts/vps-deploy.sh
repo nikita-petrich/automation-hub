@@ -27,7 +27,7 @@ docker compose up -d --remove-orphans
 
 echo "==> Wait for n8n to become healthy"
 for i in $(seq 1 40); do
-  status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' automation-hub-n8n 2>/dev/null || echo missing)"
+  status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' n8n 2>/dev/null || echo missing)"
   if [ "$status" = "healthy" ]; then
     echo "    n8n is healthy"
     break

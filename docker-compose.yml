@@ -3,8 +3,8 @@
 # =============================================================================
 # TLS + routing are handled by your EXISTING reverse proxy
 # (valian/docker-nginx-auto-ssl). n8n joins that proxy's shared Docker network
-# and is reached at  automation-hub-n8n:5678  — add this to your proxy's SITES:
-#     SITES: "...;${DOMAIN}=automation-hub-n8n:5678"
+# and is reached at  n8n:5678  — add this to your proxy's SITES:
+#     SITES: "...;${DOMAIN}=n8n:5678"
 #     ALLOWED_DOMAINS: "...;${DOMAIN}"
 #
 # n8n is published on 127.0.0.1:5678 ONLY (loopback) so the on-host deploy
@@ -15,7 +15,7 @@
 services:
   n8n:
     image: n8nio/n8n:${N8N_IMAGE_TAG:-2.31.4}
-    container_name: automation-hub-n8n
+    container_name: n8n
     restart: unless-stopped
     ports:
       - "127.0.0.1:5678:5678" # loopback only — for `npm run deploy` on the host

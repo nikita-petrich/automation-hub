@@ -34,9 +34,9 @@ In your **reverse-proxy** repo's `compose.yml`, add n8n to `SITES` and
 ```yaml
     environment:
       ALLOWED_DOMAINS: "yourexisting.de;n8n.yourdomain.de"
-      SITES: "yourexisting.de=web:3000;n8n.yourdomain.de=automation-hub-n8n:5678"
+      SITES: "yourexisting.de=web:3000;n8n.yourdomain.de=n8n:5678"
 ```
-n8n's container is `automation-hub-n8n` on port `5678`, on the same network.
+n8n's container is `n8n` on port `5678`, on the same network.
 
 ### 3. Create a dedicated SSH deploy key (on your laptop)
 ```bash
