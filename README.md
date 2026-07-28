@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="automation-hub — self-hosted n8n, workflows as code, GitOps-deployed, AI-first" width="100%">
+</p>
+
 # automation-hub
 
 Self-hosted [n8n](https://n8n.io) automation instance, reachable over HTTPS, with
@@ -35,11 +39,14 @@ Germany since 2024 for regulatory reasons.
 | Config | **`.env`** (rendered from GitHub Environment in CI/CD) | No secrets in the repo. |
 | Deploy | **n8n Public REST API** (`scripts/deploy.ts`) | Idempotent upsert by workflow name; CLI fallback. |
 
-```
-Internet ─► your nginx-auto-ssl proxy ─(shared docker net)─► n8n:5678 ─► SQLite volume
-             (TLS, SITES routing)                                 ▲
-                                              127.0.0.1:5678 ──────┤ X-N8N-API-KEY
-                                              scripts/deploy.ts (repo → n8n)
+```mermaid
+flowchart LR
+    dev["Developer / AI agent"] -->|"git push → main"| ga["GitHub Actions<br/>validate + deploy"]
+    ga -->|"SSH tunnel"| n8n["n8n<br/>Docker · SQLite"]
+    web(["Internet"]) -->|"HTTPS"| proxy["nginx-auto-ssl<br/>reverse proxy"]
+    proxy -->|"n8n:5678"| n8n
+    sched["Daily 06:00"] --> n8n
+    n8n -->|"People + Calendar API"| goog["Google<br/>Contacts · Calendar"]
 ```
 
 > **Reverse proxy:** TLS termination and hostname routing are handled by a **separate

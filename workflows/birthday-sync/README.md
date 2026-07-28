@@ -13,10 +13,15 @@ for regulatory reasons.
 
 ## Node graph
 
-```
-Schedule Trigger ─┐
-                  ├─► List Managed Events ─► List Contacts ─► Plan Operations ─► Route by Action ─┬─► Create Event (POST)
-Manual Trigger  ──┘   (Calendar API)         (People API)      (Code node)         (Switch)        └─► Update Event (PATCH)
+```mermaid
+flowchart LR
+    s["Schedule Trigger"] --> lme
+    m["Manual Trigger"] --> lme["List Managed Events<br/>(Calendar API)"]
+    lme --> lc["List Contacts<br/>(People API)"]
+    lc --> plan["Plan Operations<br/>(Code node · lib)"]
+    plan --> sw{"Route by Action"}
+    sw -->|create| ce["Create Event (POST)"]
+    sw -->|update| ue["Update Event (PATCH)"]
 ```
 
 1. **Schedule Trigger** — fires on `BIRTHDAY_SYNC_SCHEDULE` (default `0 6 * * *`,

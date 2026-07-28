@@ -5,13 +5,13 @@ This explains the internals of the deploy pipeline. For the step-by-step **setup
 
 Every push to **`main`** deploys the whole stack to your VPS:
 
-```
-push to main ─► GitHub Actions ─► validate  (npm run validate — JSON/schema/lib/tests)
-                                 ─► copy repo to the VPS            (tar stream over SSH)
-                                 ─► render .env on the VPS          (from `production` secrets)
-                                 ─► docker compose up -d on the VPS (vps-deploy.sh, starts n8n)
-                                 ─► import workflows into n8n       (npm run deploy on the runner,
-                                                                     over an SSH tunnel to n8n)
+```mermaid
+flowchart TD
+    push["push to main"] --> v["validate<br/>(JSON · schema · lib · tests)"]
+    v --> copy["copy repo to the VPS<br/>(tar over SSH)"]
+    copy --> env["render .env on the VPS<br/>(from production secrets)"]
+    env --> up["docker compose up -d on the VPS<br/>(vps-deploy.sh — starts n8n)"]
+    up --> imp["import workflows into n8n<br/>(npm run deploy over an SSH tunnel)"]
 ```
 
 Two workflow files:

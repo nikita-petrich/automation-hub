@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="automation-hub — self-hosted n8n, workflows as code, GitOps-deployed, AI-first">
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6E56F7"/>
+      <stop offset="1" stop-color="#EA4B71"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6E56F7" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#6E56F7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#EA4B71" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#EA4B71" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="340" rx="24" fill="url(#bg)"/>
+  <circle cx="1060" cy="20" r="300" fill="url(#glow)"/>
+  <circle cx="1180" cy="330" r="240" fill="url(#glow2)"/>
+  <rect x="0.5" y="0.5" width="1199" height="339" rx="24" fill="none" stroke="#30363d"/>
+
+  <!-- logo mark: n8n-style node graph (two inputs merging into one) -->
+  <rect x="56" y="56" width="72" height="72" rx="16" fill="url(#accent)"/>
+  <line x1="76" y1="78" x2="108" y2="92" stroke="#ffffff" stroke-width="3" stroke-opacity="0.95" stroke-linecap="round"/>
+  <line x1="76" y1="106" x2="108" y2="92" stroke="#ffffff" stroke-width="3" stroke-opacity="0.95" stroke-linecap="round"/>
+  <circle cx="76" cy="78" r="6.5" fill="#ffffff"/>
+  <circle cx="76" cy="106" r="6.5" fill="#ffffff"/>
+  <circle cx="108" cy="92" r="6.5" fill="#ffffff"/>
+
+  <!-- title + tagline -->
+  <text x="152" y="106" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="52" font-weight="800" fill="#F0F6FC" letter-spacing="-1">automation-hub</text>
+  <text x="154" y="150" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" fill="#8B949E">Self-hosted n8n &#183; workflows as code &#183; GitOps-deployed &#183; AI-first</text>
+
+  <!-- badges (top right) -->
+  <rect x="946" y="52" width="104" height="34" rx="17" fill="url(#accent)"/>
+  <text x="998" y="74" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#ffffff">AI-first</text>
+  <rect x="1062" y="52" width="86" height="34" rx="17" fill="none" stroke="#30363d"/>
+  <text x="1105" y="74" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#C9D1D9">MIT</text>
+
+  <!-- pipeline -->
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" fill="#C9D1D9">
+    <!-- chip 1 -->
+    <rect x="48" y="252" width="224" height="56" rx="12" fill="#1B2230" stroke="#30363d"/>
+    <rect x="49" y="260" width="4" height="40" rx="2" fill="#6E56F7"/>
+    <text x="160" y="286" text-anchor="middle">git push &#8594; main</text>
+    <!-- chip 2 -->
+    <rect x="334" y="252" width="224" height="56" rx="12" fill="#1B2230" stroke="#30363d"/>
+    <rect x="335" y="260" width="4" height="40" rx="2" fill="#2F81F7"/>
+    <text x="446" y="286" text-anchor="middle">GitHub Actions</text>
+    <!-- chip 3 -->
+    <rect x="620" y="252" width="224" height="56" rx="12" fill="#1B2230" stroke="#30363d"/>
+    <rect x="621" y="260" width="4" height="40" rx="2" fill="#3FB950"/>
+    <text x="732" y="286" text-anchor="middle">n8n &#183; Docker &#183; SQLite</text>
+    <!-- chip 4 -->
+    <rect x="906" y="252" width="224" height="56" rx="12" fill="#1B2230" stroke="#30363d"/>
+    <rect x="907" y="260" width="4" height="40" rx="2" fill="#EA4B71"/>
+    <text x="1018" y="286" text-anchor="middle">Google Calendar</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#6E7681" stroke-width="2" fill="#6E7681">
+    <line x1="282" y1="280" x2="320" y2="280"/>
+    <polygon points="320,275 330,280 320,285" stroke="none"/>
+    <line x1="568" y1="280" x2="606" y2="280"/>
+    <polygon points="606,275 616,280 606,285" stroke="none"/>
+    <line x1="854" y1="280" x2="892" y2="280"/>
+    <polygon points="892,275 902,280 892,285" stroke="none"/>
+  </g>
+</svg>
