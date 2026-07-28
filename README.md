@@ -48,7 +48,8 @@ automation-hub/
 ├── scripts/
 │   ├── deploy.ts              # upsert ALL workflows via the n8n REST API
 │   ├── backup.ts              # export live n8n → backups/ (safety net)
-│   └── validate.ts            # CI validation + `--fix` lib→workflow sync
+│   ├── validate.ts            # CI validation + `--fix` lib→workflow sync
+│   └── vps-deploy.sh          # on-VPS deploy (compose up + workflow deploy)
 ├── workflows/
 │   └── birthday-sync/         # one folder per workflow
 │       ├── workflow.json      # the n8n workflow (stable id + name)
@@ -57,9 +58,11 @@ automation-hub/
 │   ├── calendar-upsert.js     # shared, unit-tested upsert logic (single source)
 │   └── calendar-upsert.test.js
 ├── docs/
-│   └── manual-setup.md        # full one-time setup guide (server, DNS, Google, n8n)
+│   ├── manual-setup.md        # full one-time setup guide (server, DNS, Google, n8n)
+│   └── ci-cd.md               # automatic deployment to the VPS (CI/CD)
 └── .github/workflows/
-    └── validate.yml           # JSON/schema/sync validation only — NO deploy
+    ├── validate.yml           # validation on PRs / pushes (no secrets)
+    └── deploy.yml             # CD: deploy the whole stack to the VPS on push to main
 ```
 
 ## Quick start
@@ -104,7 +107,23 @@ npm run deploy
 3. If it needs shared logic, put it in `lib/` and reference it from a Code node
    between `// LIB:START` / `// LIB:END` markers (see `birthday-sync`), then run
    `npm run sync`.
-4. `npm run validate` locally, commit, open a PR (CI validates), then `npm run deploy`.
+4. `npm run validate` locally, commit, open a PR (CI validates). Merge to `main`
+   and the CD pipeline deploys it automatically (see below).
+
+## Continuous deployment (CI/CD)
+
+Two GitHub Actions workflows:
+
+- **`validate.yml`** runs on every pull request / push — JSON/schema validation,
+  `lib/` sync check, and unit tests. No secrets, never deploys.
+- **`deploy.yml`** runs on push to **`main`** (or via *Run workflow*): it validates,
+  then `rsync`s the repo onto the VPS over SSH and runs `docker compose up -d`
+  + `npm run deploy` there — so both infra and workflow changes go live
+  automatically. Deploys are idempotent.
+
+The n8n / Google secrets stay in the VPS-local `.env`; GitHub only stores the SSH
+deploy key (`VPS_SSH_KEY`, `VPS_HOST`, `VPS_USER`). Full setup — deploy key,
+secrets, promoting `main` — is in **[docs/ci-cd.md](docs/ci-cd.md)**.
 
 ## Design decisions worth knowing
 
@@ -127,7 +146,9 @@ npm run deploy
 - n8n is not reachable except through Caddy over HTTPS.
 - `N8N_ENCRYPTION_KEY` encrypts stored credentials at rest — set it once and keep
   it safe; losing or changing it makes existing credentials unreadable.
-- CI needs no secrets: it only validates JSON and runs unit tests.
+- `validate.yml` needs no secrets. `deploy.yml` uses only an SSH deploy key
+  (`VPS_SSH_KEY`) to reach the VPS — all n8n/Google secrets stay in the VPS `.env`,
+  never in GitHub. See [docs/ci-cd.md](docs/ci-cd.md).
 
 ## License
 

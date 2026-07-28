@@ -1,0 +1,87 @@
+# Continuous deployment — deploy the WHOLE stack to the VPS.
+# =============================================================================
+# On push to `main` (your production branch), GitHub Actions:
+#   1. validates the workflows (safety gate),
+#   2. rsyncs the repository onto the VPS over SSH (preserving the VPS-local
+#      .env, node_modules and backups),
+#   3. runs scripts/vps-deploy.sh there: `docker compose up -d` (applies infra
+#      changes) + `npm run deploy` (idempotent workflow upsert into n8n).
+#
+# Pull requests / feature branches only run validate.yml (no secrets, no deploy).
+#
+# Required repository configuration (Settings -> Secrets and variables -> Actions)
+#   Secrets:
+#     VPS_SSH_KEY   private SSH key whose PUBLIC key is in the VPS user's
+#                   ~/.ssh/authorized_keys (use a dedicated deploy key)
+#     VPS_HOST      server IP or hostname
+#     VPS_USER      SSH user on the VPS (must be in the `docker` group)
+#   Variables (optional):
+#     VPS_PORT      SSH port (default 22)
+#     VPS_APP_DIR   repo path on the VPS, relative to the user's home
+#                   (default: automation-hub)
+#
+# All n8n / Google secrets stay in the VPS-local .env — never in GitHub.
+# =============================================================================
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workflows/**"
+      - "lib/**"
+      - "scripts/**"
+      - "docker-compose.yml"
+      - "Caddyfile"
+      - ".env.example"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+# Never let two deploys race against the same server.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - run: npm run validate
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      VPS_APP_DIR: ${{ vars.VPS_APP_DIR || 'automation-hub' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync repository to the VPS (rsync, keeps .env)
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude '.env' \
+            --exclude 'backups' --exclude 'dist' \
+            -e "ssh -i ~/.ssh/id_deploy -p $VPS_PORT" \
+            ./ "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/"
+
+      - name: Start stack + deploy workflows on the VPS
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "cd '$VPS_APP_DIR' && bash scripts/vps-deploy.sh"
