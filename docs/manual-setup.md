@@ -1,306 +1,276 @@
-# Manual setup guide
+# Setup guide — from zero to a running, auto-deploying instance
 
-> **Using CI/CD + your existing reverse proxy?** Follow **[ci-cd.md](ci-cd.md)** —
-> it supersedes the `docker compose up` / `.env` / TLS steps below. This repo
-> ships **no** proxy: your `nginx-auto-ssl` handles TLS and routing, so n8n needs
-> no 80/443 of its own. Where this guide says "Caddy", read "your reverse proxy".
+This is the complete, end-to-end guide: how the system works and exactly how to
+set it up from scratch. Nothing here is out of date — it describes the final
+architecture (no Caddy, config in GitHub, deploy over SSH).
 
-Everything you must do by hand to get `automation-hub` running and the
-`birthday-sync` workflow live. Steps that **cannot** be automated (browser OAuth
-consent, DNS, API-key generation) are marked 🔴.
+> Legend: 🔴 = a one-time manual step that **cannot** be automated (DNS, Google
+> browser consent, API-key creation). Everything else is automated by CI/CD.
 
-Throughout, replace `<your-domain>` with the hostname you'll use (e.g.
-`n8n.example.com`) and `<server-ip>` with your server's public IPv4 address.
+Throughout, replace `<your-domain>` with your n8n hostname (e.g.
+`n8n.example.com`) and `<vps-ip>` with your server's public IPv4 address.
 
 ---
 
-## 0. What you need up front
+## 1. How it works (architecture)
 
-- A Linux server (VPS or similar) with a **public IPv4 address** and root/SSH.
-- A **domain** you control, so you can add a subdomain record.
+```
+                          ┌──────────────────────── your VPS ────────────────────────┐
+ Internet ──443──►  your reverse proxy  ──(shared docker net "edge")──►  n8n container │
+   (TLS via         (nginx-auto-ssl,                                     (SQLite,      │
+    Let's Encrypt)   routes by SITES)                                    127.0.0.1:5678)│
+                          └───────────────────────────────────────────────────────────┘
+                                                                              ▲
+                                                                              │ SSH tunnel
+   git push main ─► GitHub Actions ─► validate ─► tar repo → VPS ─► docker compose up ─┤
+                    (production env      (safety)   (over SSH)      (starts n8n)        │
+                     secrets → .env)                                npm run deploy ─────┘
+                                                                    (imports workflows via
+                                                                     the SSH tunnel)
+```
+
+**Principles**
+
+- **The repo is the single source of truth.** Deployment is **one-way**: repo → n8n.
+  Editing a workflow in the n8n UI is not the source of truth and is overwritten on
+  the next deploy. (`npm run backup` exports live state if you ever need a snapshot.)
+- **The VPS needs only Docker.** No Node, no rsync, no Caddy. n8n runs on SQLite,
+  is published on `127.0.0.1:5678` (loopback only), and joins your existing reverse
+  proxy's Docker network so the proxy can route to it. TLS is the proxy's job.
+- **All configuration lives in a GitHub `production` Environment** (as secrets).
+  The pipeline renders the VPS `.env` from those secrets on every deploy — you never
+  hand-edit `.env` on the server.
+- **Deploys are idempotent.** Workflows upsert by name; `docker compose up -d` is a
+  no-op when nothing changed. The birthday sync itself is idempotent too (dedup by
+  the People API `resourceName`), so it never creates duplicate calendar events.
+
+**What runs when**
+
+- **On `git push` to `main`** → GitHub Actions deploys infra + workflows to the VPS.
+- **Daily at 06:00 Europe/Berlin** → n8n's Schedule Trigger runs the birthday sync
+  (independent of GitHub; it's inside n8n). You can also run it on demand in n8n via
+  **Execute Workflow**.
+
+---
+
+## 2. Prerequisites
+
+- A Linux VPS with a **public IPv4** and SSH access, with **Docker + Compose**
+  installed (nothing else). `curl -fsSL https://get.docker.com | sh`
+- A **reverse proxy** already running on that VPS that terminates TLS and routes by
+  hostname. This guide assumes [`valian/docker-nginx-auto-ssl`](https://github.com/Valian/docker-nginx-auto-ssl)
+  (automatic Let's Encrypt), on an **external** Docker network (e.g. `edge`).
+- A **domain** you control.
 - A **Google account** whose Contacts hold the birthdays.
-- This repository checked out on the server (or on a machine that can reach the
-  server's public URL for the deploy step).
-
-🔴 **You must hand me** (if you want me to continue the automated parts):
-your exact `<your-domain>`, and later the **n8n API key** and optionally the
-**Google OAuth2 credential ID**. I cannot click through Google's browser consent,
-create DNS records, or generate the n8n API key for you.
+- This repository on GitHub, with **Actions** enabled.
 
 ---
 
-## 1. Server prerequisites
+## 3. Infrastructure (VPS, DNS, proxy)
 
-Install Docker Engine + the Compose plugin (Debian/Ubuntu shown):
+### 3a. DNS 🔴
+Create an **A record**: `<your-domain>` → `<vps-ip>`. Verify: `dig +short <your-domain>`.
 
-```bash
-curl -fsSL https://get.docker.com | sh
-docker --version
-docker compose version
+### 3b. Reverse proxy → n8n 🔴
+In your reverse-proxy stack, route the hostname to the n8n container (`n8n:5678`)
+and allow it for certificate issuance, then restart that stack:
+
+```yaml
+    environment:
+      # ALLOWED_DOMAINS is a PCRE regex (nginx-auto-ssl uses ngx.re.match).
+      # A literal dot is "." (any char) or "\." — do NOT use Lua's "%." here.
+      ALLOWED_DOMAINS: "<your-domain>"
+      SITES: "<your-domain>=n8n:5678"
 ```
 
-Open the firewall for HTTP/HTTPS (needed for Let's Encrypt + access). Example
-with `ufw`:
+Notes:
+- The n8n container is named **`n8n`** and listens on `5678` on the shared network.
+- The shared network must exist; both stacks reference it as `external`. If needed:
+  `docker network create edge`, and set `PROXY_NETWORK` (secret, step 5) to its name.
 
+### 3c. Docker group (for the deploy user)
+The SSH user the pipeline logs in as must run Docker without sudo:
 ```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw allow 443/udp   # HTTP/3 (optional)
-sudo ufw reload
+sudo usermod -aG docker "$USER"    # then log out and back in once
 ```
-
-> If your server is behind a cloud provider firewall/security group (AWS, Hetzner
-> Cloud, GCP, …), open **80 and 443** there as well — the OS firewall alone is not
-> enough.
 
 ---
 
-## 2. Domain / DNS 🔴
+## 4. Google Cloud + OAuth 🔴
 
-In your DNS provider, create an **A record** for the subdomain pointing at your
-server:
+All in the [Google Cloud Console](https://console.cloud.google.com/). See
+[§9 for verification & cost](#9-google-cloud-verification--costs-the-risks-question)
+— short version: **free, no verification needed for personal use.**
 
-| Type | Name (host) | Value | TTL |
-|------|-------------|-------|-----|
-| A | `n8n` (→ `n8n.example.com`) | `<server-ip>` | 300 (or default) |
-
-Wait for it to propagate, then verify from your laptop:
-
-```bash
-dig +short <your-domain>      # must print <server-ip>
-```
-
-Do **not** start the stack until this resolves — Caddy needs it to obtain the
-certificate.
-
----
-
-## 3. Google Cloud: APIs, consent screen, OAuth client 🔴
-
-All in the [Google Cloud Console](https://console.cloud.google.com/).
-
-### 3a. Create a project
-- Top bar → project dropdown → **New Project** → name it e.g. `automation-hub` → **Create**.
-
-### 3b. Enable the two APIs
-For each, open the link, make sure your new project is selected, click **Enable**:
-- **People API** → https://console.cloud.google.com/apis/library/people.googleapis.com
-- **Google Calendar API** → https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
-
-### 3c. Configure the OAuth consent screen
-**APIs & Services → OAuth consent screen** (https://console.cloud.google.com/apis/credentials/consent):
-1. User type: **External** → **Create**.
-2. App name: `automation-hub`; user support email: your email; developer contact:
-   your email → **Save and continue**.
-3. **Scopes** → **Add or remove scopes** → add these two, then **Update**:
+1. **Create a project** → [projectcreate](https://console.cloud.google.com/projectcreate) (e.g. `automation-hub`).
+2. **Enable both APIs** (select the project first, click *Enable*):
+   [People API](https://console.cloud.google.com/apis/library/people.googleapis.com)
+   and [Google Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com).
+3. **OAuth consent screen** → [auth/overview](https://console.cloud.google.com/auth/overview):
+   User type **External**, app name + your email.
+4. **Scopes** → [Data Access](https://console.cloud.google.com/auth/scopes) → add:
    - `https://www.googleapis.com/auth/contacts.readonly`
    - `https://www.googleapis.com/auth/calendar.events`
-4. **Test users** → **Add users** → add your own Google address → **Save and continue**.
-5. **Publishing status** (important for a daily, unattended sync):
-   - In **Testing** mode, Google **expires the refresh token after 7 days**, so
-     the sync would break weekly and need re-authorization.
-   - Recommended: **Publish app** (→ "In production"). As the sole user you can
-     click through the "Google hasn't verified this app" warning, and the refresh
-     token no longer expires on a 7-day clock. Full verification is only required
-     for wide public distribution.
-
-### 3d. Create the OAuth client ID
-**APIs & Services → Credentials** → **Create Credentials → OAuth client ID**:
-1. Application type: **Web application**.
-2. Name: `n8n`.
-3. **Authorized redirect URIs → Add URI**:
-   ```
-   https://<your-domain>/rest/oauth2-credential/callback
-   ```
-   (This is n8n's standard OAuth2 callback path.)
-4. **Create**. Copy the **Client ID** and **Client secret** — you'll paste them
-   into n8n in step 7.
-
-**Required scopes (for reference):**
-`contacts.readonly` (read Contacts) and `calendar.events` (create/update events).
+5. **Publish the app** → [Audience](https://console.cloud.google.com/auth/audience) →
+   **Publish app**. ⚠️ Important: in **Testing** mode Google **expires the refresh
+   token after 7 days**, which would break the sync weekly. Publishing (to
+   *In production*) keeps it working; you click through a one-time "unverified app"
+   warning as the owner (details in §9).
+6. **OAuth client** → [Clients](https://console.cloud.google.com/auth/clients) →
+   **Create client** → type **Web application** → name `n8n` →
+   **Authorized redirect URI**: `https://<your-domain>/rest/oauth2-credential/callback`
+   → **Create** → copy the **Client ID** and **Client secret**.
 
 ---
 
-## 4. Create the target calendar & get its ID 🔴
+## 5. GitHub `production` Environment (all config as secrets)
 
-This repo ships a default `CALENDAR_ID` in `.env.example`. To use a **fresh,
-dedicated** calendar instead (recommended so birthdays are separable/toggleable):
-
-1. [Google Calendar](https://calendar.google.com/) → left sidebar → **Other
-   calendars** → **+** → **Create new calendar**.
-2. Name it **`Contact Birthdays`** → **Create calendar**.
-3. **Settings for my calendars → Contact Birthdays → Integrate calendar** →
-   copy the **Calendar ID** (looks like `...@group.calendar.google.com`).
-4. Use that value for `CALENDAR_ID` in `.env` (step 5).
-
----
-
-## 5. Fill in `.env`
-
+### 5a. SSH deploy key 🔴 (on your laptop)
 ```bash
-cp .env.example .env
+ssh-keygen -t ed25519 -C "automation-hub-deploy" -f ~/.ssh/automation-hub-deploy -N ""
+ssh-copy-id -i ~/.ssh/automation-hub-deploy.pub <vps-user>@<vps-ip>
 ```
+This lets GitHub Actions log in to the VPS non-interactively. Use a dedicated key
+(easy to revoke by removing its line from the VPS `~/.ssh/authorized_keys`).
 
-| Variable | Value |
-|----------|-------|
+### 5b. Create the environment 🔴
+Repo → **Settings → Environments → New environment** → `production`. Add everything
+as **secrets** (Add environment secret):
+
+| Secret | Value |
+|--------|-------|
+| `VPS_SSH_KEY` | the **private** key `~/.ssh/automation-hub-deploy` (full text) |
+| `VPS_HOST` | `<vps-ip>` |
+| `VPS_USER` | your SSH user |
+| `N8N_ENCRYPTION_KEY` | `openssl rand -hex 32` — generate once, **keep forever** |
 | `DOMAIN` | `<your-domain>` |
-| `N8N_IMAGE_TAG` | leave pinned (e.g. `2.31.4`) unless upgrading |
-| `N8N_ENCRYPTION_KEY` | **generate once:** `openssl rand -hex 32` → paste the output |
-| `CALENDAR_ID` | the calendar ID from step 4 |
-| `BIRTHDAY_SYNC_SCHEDULE` | leave `0 6 * * *` (daily 06:00) or adjust |
-| `SHOW_BIRTH_YEAR` | `true` for `(turning N)` titles, else `false` |
-| `N8N_API_KEY` | **leave blank for now** — created in step 8 |
-| `N8N_API_URL` | `https://<your-domain>` |
-| `GOOGLE_OAUTH_CRED_ID` | **leave blank for now** — optional, filled in step 7 |
+| `PROXY_NETWORK` | your reverse proxy's Docker network name (e.g. `edge`) |
+| `CALENDAR_ID` | the target Google calendar id (see the workflow README) |
+| `N8N_API_KEY` | *added in step 7* |
+| `GOOGLE_OAUTH_CRED_ID` | *added in step 7* |
+| `BIRTHDAY_SYNC_SCHEDULE` | optional (default `0 6 * * *`) |
+| `SHOW_BIRTH_YEAR` | optional (default `true`) |
+| `N8N_IMAGE_TAG` | optional (default pinned in compose) |
+| `VPS_PORT` / `VPS_APP_DIR` | optional (defaults `22` / `automation-hub`) |
 
-> ⚠️ Set `N8N_ENCRYPTION_KEY` **before first start** and never change it
-> afterwards — changing it makes stored credentials unreadable.
+> ⚠️ Never change `N8N_ENCRYPTION_KEY` after credentials exist — it makes stored
+> credentials unreadable.
 
 ---
 
-## 6. Start the stack, verify TLS, create the owner
+## 6. First deploy (brings n8n up)
 
+Promote the current branch to `main` (the production branch) and push:
 ```bash
-docker compose up -d
-docker compose ps
-docker compose logs -f caddy      # watch for a successfully obtained certificate
+git branch -M main && git push -u origin main
 ```
+GitHub → **Settings → Branches** → default branch `main`.
 
-Caddy fetches the Let's Encrypt certificate on the first HTTPS request. A healthy
-log shows `certificate obtained successfully` for `<your-domain>` and no ACME
-errors. If it fails, re-check DNS (step 2) and that 80/443 are open (step 1).
-
-Then open **`https://<your-domain>`** in the browser. n8n shows a first-run
-screen — **create the owner account** (email + password). This is your admin
-login.
+The pipeline runs. On this first run **n8n comes up**, but the workflow import is
+**skipped** (no API key yet) — that is expected. Watch it under the **Actions** tab.
 
 ---
 
-## 7. Create & authorize the Google OAuth2 credential in n8n 🔴
+## 7. n8n one-time setup 🔴, then finish
 
-1. In n8n: **top-right menu → Credentials → Add credential** (or
-   `https://<your-domain>/home/credentials`).
-2. Search for and choose **"OAuth2 API"** (the generic one). Name it exactly
-   **`Google OAuth2 (automation-hub)`** (matches what `workflow.json` expects).
-3. Fill in:
+Open **`https://<your-domain>`** (your proxy now serves it):
+
+1. **Create the n8n owner account** (email + password).
+2. **Create the Google OAuth2 credential:** **Credentials → Add credential** → pick
+   the **generic** entry named exactly **`OAuth2 API`** (NOT "Google OAuth2 API" or
+   any "… OAuth2 API" — only the plain one lets you set custom URLs + scope). Fill:
+
    | Field | Value |
    |-------|-------|
    | Grant Type | `Authorization Code` |
    | Authorization URL | `https://accounts.google.com/o/oauth2/v2/auth` |
    | Access Token URL | `https://oauth2.googleapis.com/token` |
-   | Client ID | *(from step 3d)* |
-   | Client Secret | *(from step 3d)* |
+   | Client ID / Secret | *(from step 4.6)* |
    | Scope | `https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/calendar.events` |
    | Auth URI Query Parameters | `access_type=offline&prompt=consent` |
-   | Authentication | leave default; if the token step later errors, switch to **Body** |
-4. Confirm the **OAuth Redirect URL** shown by n8n is
-   `https://<your-domain>/rest/oauth2-credential/callback` — it must match the URI
-   you registered in step 3d.
-5. Click **Connect my account / Sign in with Google** → complete the browser
-   consent (choose your account; click through the "unverified app" warning if
-   shown; approve both permissions). The credential should turn green
-   ("Connected").
-6. **Note the credential ID** — open the saved credential and copy the id from the
-   URL: `https://<your-domain>/home/credentials/<THIS-ID>`. Put it in `.env` as
-   `GOOGLE_OAUTH_CRED_ID=<THIS-ID>` so `deploy` can wire it into every node
-   automatically. *(Optional — otherwise you'll select the credential by hand on
-   each HTTP node after deploying.)*
+
+   → **Save** → **Connect my account** → complete the Google consent (click through
+   the "unverified app" warning) → it turns green. Open the saved credential and copy
+   its **id from the URL**: `…/home/credentials/`**`THIS-ID`**.
+3. **Create an n8n API key:** **Settings → n8n API → Create an API key** → copy it.
+4. **Add the two remaining secrets** to the `production` environment:
+   `N8N_API_KEY` and `GOOGLE_OAUTH_CRED_ID` (the id from step 7.2).
+5. **Re-run the deploy:** Actions → *deploy* → **Run workflow** (or push to `main`).
+   This imports the workflow, wires the credential into every node, and activates it.
 
 ---
 
-## 8. Generate an n8n API key 🔴
+## 8. Verify & finish
 
-In n8n: **Settings → n8n API → Create an API key**
-(`https://<your-domain>/settings/api`). Copy the key and put it in `.env`:
+1. In n8n open **Birthday Sync (Contacts → Calendar)** → **Execute Workflow**.
+2. Check the target calendar → `🎂 Name (turning N)` yearly all-day events appear.
+3. Run it again → **0** new items = idempotency proven (no duplicates).
+4. 🔴 In Google Calendar → the target calendar → **Settings → all-day event
+   notifications** → add e.g. *1 day before, 09:00* (otherwise no phone reminder).
 
-```
-N8N_API_KEY=<the key you just created>
-```
-
----
-
-## 9. Deploy the workflow from the repo
-
-From the repo (on the server, or any machine that can reach
-`https://<your-domain>`):
-
-```bash
-npm install       # first time only
-npm run deploy
-```
-
-Expected output: `created "Birthday Sync (Contacts → Calendar)"` and, if
-`GOOGLE_OAUTH_CRED_ID` was set, `activated`. If you left the credential ID blank,
-deploy leaves the workflow **inactive** and prints a note — open the workflow,
-select the Google credential on each HTTP Request node, save, then either
-re-run `npm run deploy` (with `GOOGLE_OAUTH_CRED_ID` set) or toggle **Active** in
-the UI.
+From now on: `git push` to `main` deploys everything; the daily 06:00 schedule keeps
+the calendar in sync automatically.
 
 ---
 
-## 10. Run a manual full sync & verify
+## 9. Google Cloud: verification & costs (the "risks" question)
 
-1. Open the **Birthday Sync (Contacts → Calendar)** workflow in n8n.
-2. Click **Execute Workflow**.
-3. Each node should light up green. `Create Event` shows one item per new
-   birthday.
-4. Open [Google Calendar](https://calendar.google.com/) → the **Contact
-   Birthdays** calendar now contains `🎂 Name (turning N)` all-day events that
-   repeat yearly.
-5. Click **Execute Workflow** again — this time `Plan Operations` outputs **0**
-   items (everything skipped). That confirms idempotency: no duplicates.
+**Verification / app review — not required for personal use.**
+- `contacts.readonly` and `calendar.events` are **sensitive** scopes (not
+  *restricted*). Restricted scopes (e.g. full Gmail/Drive) would need a paid annual
+  third-party **security assessment** — these do **not**.
+- Apps using sensitive scopes only need Google's OAuth verification once they exceed
+  **100 users**. A personal instance (just you) stays well under that, so **no
+  verification is required** — you simply click through the one-time
+  "unverified app" warning during consent. (You *may* verify later only if you want
+  to remove that warning or add many users.)
 
----
+**Costs — none at this scale.**
+- Creating a Google Cloud **project is free**; the People API and Calendar API are
+  **free within generous daily quotas**, and a **billing account / credit card is not
+  required** for free-quota usage. This workflow makes a few dozen calls per day —
+  orders of magnitude below any limit.
+- Google has announced that **exceeding** the free quota may incur charges *later in
+  2026*, with ≥90 days notice — irrelevant at this volume, and it only affects usage
+  above the free tier.
 
-## 11. Enable notifications for all-day events 🔴
+**The one caveat we already handled:** OAuth apps in **Testing** publishing status
+expire the refresh token after 7 days. That is why step 4.5 **publishes** the app —
+then the token persists (it can still be revoked by inactivity of ~6 months, a
+password reset, or manual revocation, none of which apply to a daily job).
 
-Reminders for all-day events are a **per-calendar** setting — the workflow can't
-set your phone's reminder for you:
+Sources: Google — [sensitive-scope verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification),
+[OAuth app verification help](https://support.google.com/cloud/answer/13463073),
+[Calendar API usage limits](https://developers.google.com/workspace/calendar/api/guides/quota).
 
-- **Google Calendar (web):** Settings → **Contact Birthdays** → **Event
-  notifications** / **All-day event notifications** → add e.g. *Notification, 1
-  day before, at 09:00* (or your preference).
-- **Phone:** make sure the **Contact Birthdays** calendar is enabled/synced in the
-  Google Calendar app so the notification reaches you.
-
----
-
-## 12. Confirm the schedule is active
-
-- In the workflow list, the **Active** toggle for *Birthday Sync* is **on**.
-- **Executions** (`https://<your-domain>/home/executions`) will show a run each
-  day at your `BIRTHDAY_SYNC_SCHEDULE` time (default 06:00 Europe/Berlin).
-
-Done. New contacts and edited birthdays are picked up automatically every day,
-and you can always trigger a full sync manually (step 10).
+**Other services:** Let's Encrypt is free; n8n Community Edition (self-hosted) is
+free; GitHub Actions minutes are effectively free at this volume (the daily sync runs
+inside n8n, not in Actions — only deploys use Actions minutes, ~1–2 min each).
 
 ---
 
-## What can't be automated (must be you)
+## 10. Day-2 operations
 
-- 🔴 **DNS** A record and propagation (step 2).
-- 🔴 **Google Cloud** project, API enablement, consent screen, OAuth client
-  (step 3) — and the **browser OAuth consent** in n8n (step 7).
-- 🔴 **n8n owner account** creation (step 6) and **API-key generation** (step 8).
-
-## What to hand me so I can continue
-
-- Your exact **`<your-domain>`** (to personalize the guide and configs).
-- After step 8, the **`N8N_API_KEY`** and (optionally) **`GOOGLE_OAUTH_CRED_ID`**,
-  if you want me to run/verify the deploy for you.
-- Do **not** share your `N8N_ENCRYPTION_KEY`, OAuth **client secret**, or the
-  contents of `.env` in plain text unless you intend to.
+- **Add another workflow:** create `workflows/<name>/workflow.json` with a stable
+  `name` + `active: true`, add a short README, `npm run validate` locally, commit,
+  merge to `main` → it deploys automatically. Shared logic goes in `lib/` between
+  `// LIB:START` / `// LIB:END` markers (see `birthday-sync`).
+- **Change config:** edit the secret in the `production` environment, then re-run the
+  deploy (the `.env` is re-rendered).
+- **Rollback:** `git revert <bad-commit> && git push origin main` — CD redeploys the
+  previous state.
+- **Backup:** `npm run backup` exports live workflows to `backups/` (disaster-recovery
+  snapshot; gitignored). The repo remains the source of truth.
 
 ---
 
-## Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Caddy can't get a certificate | DNS not pointing at the server yet, or 80/443 blocked (OS **and** cloud firewall). |
-| n8n OAuth error `redirect_uri_mismatch` | The redirect URI in Google (step 3d) must exactly equal `https://<your-domain>/rest/oauth2-credential/callback`. |
-| Token exchange fails in n8n | In the credential, set **Authentication = Body** and reconnect. |
-| Sync stops working after ~7 days | Consent screen still in **Testing** — publish the app (step 3c.5) and reconnect the credential. |
-| `deploy` says *Public API unreachable* | Check `N8N_API_URL`/`N8N_API_KEY` in `.env`; the key is created under Settings → n8n API. |
-| Events created but no phone reminder | All-day notifications are per-calendar — configure them (step 11). |
-| Duplicate events | Shouldn't happen (dedup by `contactId`). If you imported the workflow twice under different names, delete the extra and its events, then re-deploy. |
+| Browser shows **"Dangerous" / untrusted cert** | Your reverse proxy served a self-signed fallback because `ALLOWED_DOMAINS` didn't match. It's a **PCRE regex** — use `"<your-domain>"` (or `"\.example\.com$"`), not Lua's `%.`. Restart the proxy, reload the page. |
+| n8n OAuth `redirect_uri_mismatch` | The Google redirect URI must be exactly `https://<your-domain>/rest/oauth2-credential/callback`. |
+| Sync stops after ~7 days | Consent screen still in **Testing** — publish the app (step 4.5) and reconnect. |
+| Deploy is red at "Start stack" | The SSH user isn't in the `docker` group, or the `edge` network doesn't exist. |
+| Deploy red at "Deploy workflows" | `N8N_API_KEY` missing/invalid, or n8n not healthy. Check the two secrets. |
+| Only "OAuth2 API" variants shown in n8n | Pick the **plain** `OAuth2 API` (generic), not `Google OAuth2 API`. |

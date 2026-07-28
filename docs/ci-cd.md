@@ -1,100 +1,75 @@
-# CI/CD — automatic deployment to the VPS
+# CI/CD — how the pipeline works
 
-Every push to **`main`** deploys the whole stack to your VPS automatically:
+This explains the internals of the deploy pipeline. For the step-by-step **setup**
+(secrets, SSH key, Google, first deploy), see **[manual-setup.md](manual-setup.md)**.
+
+Every push to **`main`** deploys the whole stack to your VPS:
 
 ```
-push to main ─► GitHub Actions ─► validate
-                                 ─► copy repo to the VPS (tar over SSH)
-                                 ─► render .env on the VPS from the `production`
-                                    GitHub Environment (all secrets)
-                                 ─► docker compose up -d on the VPS  (starts n8n)
-                                 ─► npm run deploy on the runner     (workflows → n8n API)
+push to main ─► GitHub Actions ─► validate  (npm run validate — JSON/schema/lib/tests)
+                                 ─► copy repo to the VPS            (tar stream over SSH)
+                                 ─► render .env on the VPS          (from `production` secrets)
+                                 ─► docker compose up -d on the VPS (vps-deploy.sh, starts n8n)
+                                 ─► import workflows into n8n       (npm run deploy on the runner,
+                                                                     over an SSH tunnel to n8n)
 ```
 
-- All config lives in the GitHub **`production` Environment** — you never edit
-  `.env` on the server by hand; the pipeline renders it on every deploy.
-- TLS/routing is handled by your **existing `nginx-auto-ssl` reverse proxy**; n8n
-  joins its shared Docker network. This repo ships no proxy.
-- Deploys are idempotent (workflow upsert by name; `docker compose up -d` is a
-  no-op when nothing changed).
+Two workflow files:
+- **`validate.yml`** — runs on every pull request / push. JSON + schema validation,
+  `lib/` drift check, unit tests. **No secrets, never deploys.**
+- **`deploy.yml`** — runs on push to `main` (and manual *Run workflow*).
 
-## One-time setup
+## What each step of `deploy.yml` does
 
-### 1. VPS prerequisites
-- Docker + Compose installed (that's all — **Node is NOT needed** on the VPS; the
-  workflow import runs on the GitHub runner via the public n8n API).
-- Your reverse-proxy stack already running, and its shared network name known
-  (its compose defaults to `example-net`).
-- The SSH deploy user in the `docker` group: `sudo usermod -aG docker "$USER"`
-  (then log out/in once).
-- DNS: an A record for your n8n hostname → the VPS IP.
+The `deploy` job (which `needs: validate`) runs on a GitHub-hosted runner:
 
-### 2. Point your reverse proxy at n8n
-In your **reverse-proxy** repo's `compose.yml`, add n8n to `SITES` and
-`ALLOWED_DOMAINS` (semicolon-separated), then restart that stack:
-```yaml
-    environment:
-      ALLOWED_DOMAINS: "yourexisting.de;n8n.yourdomain.de"
-      SITES: "yourexisting.de=web:3000;n8n.yourdomain.de=n8n:5678"
-```
-n8n's container is `n8n` on port `5678`, on the same network.
+1. **Configure SSH** — writes the `VPS_SSH_KEY` secret to a key file and
+   `ssh-keyscan`s the host.
+2. **Sync repository to the VPS** — streams the repo as a `tar` archive over SSH and
+   extracts it on the VPS (`tar` is on every Linux, so the VPS needs no `rsync`).
+   Excludes `.git`, `node_modules`, `.env`, `backups`, `dist`.
+3. **Render `.env` on the VPS** — builds the `.env` from the `production` environment
+   secrets and `scp`s it to the VPS (chmod 600). You never hand-edit `.env` there.
+4. **Start stack on the VPS** — over SSH runs `scripts/vps-deploy.sh`, which does
+   `docker compose pull && up -d` and waits for the n8n container to be healthy.
+   *(The VPS needs only Docker — no Node, no rsync.)*
+5. **Import workflows into n8n** — on the runner, opens an **SSH tunnel** to the VPS's
+   loopback port (`-L 127.0.0.1:5678:127.0.0.1:5678`) and runs `npm run deploy`
+   against `http://127.0.0.1:5678`. This reaches the n8n API **directly and securely
+   over SSH**, so it does **not** depend on the public TLS certificate (Node would
+   otherwise reject an untrusted/self-signed cert). If `N8N_API_KEY` isn't set yet,
+   this step is skipped with a message (first-run bootstrap).
 
-### 3. Create a dedicated SSH deploy key (on your laptop)
-```bash
-ssh-keygen -t ed25519 -C "automation-hub-deploy" -f ~/.ssh/automation-hub-deploy -N ""
-ssh-copy-id -i ~/.ssh/automation-hub-deploy.pub <vps-user>@<vps-host>
-```
+`scripts/deploy.ts` performs the actual **upsert by workflow name** (create if new,
+replace if present), injects `lib/calendar-upsert.js` into the Code node, injects the
+schedule from `BIRTHDAY_SYNC_SCHEDULE`, wires `GOOGLE_OAUTH_CRED_ID` into every HTTP
+node, and activates the workflow. It's idempotent — repeated deploys never duplicate.
 
-### 4. Create the GitHub `production` Environment
-Repo → **Settings → Environments → New environment** → `production`. Add
-everything as **Secrets** (Add environment secret):
+## Why deploy this way
 
-| Secret | Value |
-|--------|-------|
-| `VPS_SSH_KEY` | the **private** key `~/.ssh/automation-hub-deploy` |
-| `VPS_HOST` | server IP / hostname |
-| `VPS_USER` | SSH user |
-| `N8N_ENCRYPTION_KEY` | `openssl rand -hex 32` (generate once, keep forever) |
-| `DOMAIN` | your n8n hostname, e.g. `n8n.yourdomain.de` |
-| `PROXY_NETWORK` | your reverse proxy's Docker network name (e.g. `example-net`) |
-| `CALENDAR_ID` | target Google calendar id |
-| `N8N_API_KEY` | *(added after step 6)* |
-| `GOOGLE_OAUTH_CRED_ID` | *(added after step 6)* |
-| `BIRTHDAY_SYNC_SCHEDULE` | optional (default `0 6 * * *`) |
-| `SHOW_BIRTH_YEAR` | optional (default `true`) |
-| `N8N_IMAGE_TAG` | optional (default `2.31.4`) |
-| `VPS_PORT` / `VPS_APP_DIR` | optional (defaults `22` / `automation-hub`) |
-
-### 5. Promote `main` and first deploy
-```bash
-git branch -M main && git push -u origin main   # from a clone of the repo
-```
-(GitHub → Settings → Branches → default branch = `main`.) The pipeline runs: it
-brings n8n up. Until `N8N_API_KEY` is set the workflow deploy is **skipped**
-(with a message) — that's expected.
-
-### 6. One-time browser steps, then finish
-Open `https://<DOMAIN>` (your proxy now serves it): create the **n8n owner**,
-create + authorize the **Google OAuth2 credential**, and generate an **n8n API
-key** (Settings → n8n API). Then:
-- add secret **`N8N_API_KEY`** and variable **`GOOGLE_OAUTH_CRED_ID`** to the
-  `production` environment,
-- re-run the deploy (Actions → *deploy* → **Run workflow**, or push to `main`).
-
-Done — the workflow deploys and activates, and every future push to `main`
-redeploys automatically.
+- **VPS needs only Docker.** No Node, no rsync, no bundled proxy.
+- **Cert-independent.** The workflow import goes over the SSH tunnel, so a
+  not-yet-valid public certificate never blocks a deploy.
+- **Secrets stay in GitHub.** Only an SSH deploy key reaches the VPS; the n8n/Google
+  secrets live in the `production` Environment and are rendered into `.env` per deploy.
 
 ## Security notes
-- The SSH key grants the runner shell access to the VPS user (which drives
-  Docker). Use a dedicated key + non-root user. Alternative: a **self-hosted
-  runner** on the VPS instead of inbound SSH.
-- `N8N_ENCRYPTION_KEY` and `N8N_API_KEY` live in GitHub as environment secrets
-  (masked in logs). Rotate them if exposed.
-- `ssh-keyscan` trusts the host key on first contact; for stricter security pin
-  it via a `VPS_KNOWN_HOSTS` secret.
 
-## Rollback
-The repo is the source of truth, so rollback is a git revert:
-```bash
-git revert <bad-commit> && git push origin main   # CD redeploys the previous state
-```
+- The SSH key grants the runner shell access to the VPS user (which drives Docker).
+  Use a **dedicated** deploy key + a non-root user; revoke by removing its line from
+  the VPS `~/.ssh/authorized_keys`. Alternative: a **self-hosted runner** on the VPS.
+- `N8N_ENCRYPTION_KEY`, `N8N_API_KEY`, `VPS_SSH_KEY` are GitHub environment secrets
+  (masked in logs). Rotate them if exposed.
+- `ssh-keyscan` trusts the host key on first contact; for stricter security, store the
+  host key in a secret and write it to `~/.ssh/known_hosts` instead.
+- Optional: add **required reviewers** to the `production` environment (Settings →
+  Environments) to gate deploys behind an approval.
+
+## Operations
+
+- **Add a workflow / change config / backup:** see [manual-setup.md §10](manual-setup.md#10-day-2-operations).
+- **Rollback** — the repo is the source of truth:
+  ```bash
+  git revert <bad-commit> && git push origin main   # CD redeploys the previous state
+  ```
+- **Manual deploy:** Actions → *deploy* → **Run workflow** (branch `main`).
