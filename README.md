@@ -181,4 +181,5 @@ adapted from [ai-blueprint](https://github.com/bradtraversy/ai-blueprint):
 
 ## License
 
-Private project. Not licensed for redistribution.
+[MIT](LICENSE) © 2026 Nikita Petrich. Provided **"as is", without warranty or
+liability** — a small personal project, shared so others can see and reuse it.

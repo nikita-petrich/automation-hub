@@ -2,6 +2,7 @@
   "name": "automation-hub",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Self-hosted n8n automation hub. The repository is the single source of truth; deployment is one-way (repo -> n8n).",
   "engines": {
     "node": ">=20"
