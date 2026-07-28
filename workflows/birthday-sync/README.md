@@ -94,11 +94,16 @@ signature-based update refreshes the event when the number rolls over. Set
 
 ## Configuration (from `.env`)
 
+Every value below is read by **`scripts/deploy.ts` on the GitHub runner** and baked
+into the workflow at deploy time. The workflow itself reads no environment variables
+— that is what lets the container block env access to nodes, so nothing running in
+n8n can reach `N8N_ENCRYPTION_KEY`. Change a value → re-run the deploy.
+
 | Variable | Effect |
 |----------|--------|
-| `CALENDAR_ID` | Target calendar the events are written to. Read at runtime via `$env`. |
-| `SHOW_BIRTH_YEAR` | `true` → show `(turning N)` when a birth year exists. |
-| `BIRTHDAY_SYNC_SCHEDULE` | Cron for the Schedule Trigger (injected at deploy time). |
+| `CALENDAR_ID` | Target calendar the events are written to. Required — the deploy fails without it. |
+| `SHOW_BIRTH_YEAR` | `true` (default) → show `(turning N)` when a birth year exists. |
+| `BIRTHDAY_SYNC_SCHEDULE` | Cron for the Schedule Trigger. |
 | `GOOGLE_OAUTH_CRED_ID` | Optional; if set, `deploy.ts` wires the credential into every HTTP node automatically. |
 
 ## Edge cases handled

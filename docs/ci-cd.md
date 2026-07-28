@@ -46,8 +46,14 @@ The `deploy` job (which `needs: validate`) runs on a GitHub-hosted runner:
 
 `scripts/deploy.ts` performs the actual **upsert by workflow name** (create if new,
 replace if present), injects `lib/calendar-upsert.js` into the Code node, injects the
-schedule from `BIRTHDAY_SYNC_SCHEDULE`, wires `GOOGLE_OAUTH_CRED_ID` into every HTTP
-node, and activates the workflow. It's idempotent — repeated deploys never duplicate.
+schedule from `BIRTHDAY_SYNC_SCHEDULE` and the runtime config (`CALENDAR_ID`,
+`SHOW_BIRTH_YEAR`), wires `GOOGLE_OAUTH_CRED_ID` into every HTTP node, and activates
+the workflow. It's idempotent — repeated deploys never duplicate.
+
+Baking the config in at deploy time is deliberate: the workflow reads **no** `$env`,
+so the container can block env access to nodes (see the security notes below). A
+missing `CALENDAR_ID` fails the deploy rather than shipping a workflow that would
+break at its next scheduled run.
 
 ## Why deploy this way
 
@@ -74,6 +80,14 @@ node, and activates the workflow. It's idempotent — repeated deploys never dup
   `npm ci --ignore-scripts`, in a step that runs before any step-scoped secret or
   the SSH tunnel exists. A compromised package therefore has neither the
   production secrets nor a route to the VPS.
+- **Nodes cannot read the container's environment**
+  (`N8N_BLOCK_ENV_ACCESS_IN_NODE=true`). `N8N_ENCRYPTION_KEY` lives in that
+  environment, and it decrypts the stored Google OAuth refresh token — so without
+  the flag, anyone able to edit a workflow could exfiltrate it in one line. The
+  non-secret runtime config that used to need env access is injected at deploy
+  time instead, and `npm run validate` fails on any workflow that reintroduces
+  `$env`. `N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=true` closes the matching route via
+  `~/.n8n` (config file + SQLite database).
 - Optional: add **required reviewers** to the `production` environment (Settings →
   Environments) to gate deploys behind an approval.
 

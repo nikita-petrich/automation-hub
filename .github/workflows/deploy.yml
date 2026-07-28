@@ -154,12 +154,17 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "cd '$VPS_APP_DIR' && bash scripts/vps-deploy.sh"
 
+      # CALENDAR_ID and SHOW_BIRTH_YEAR are needed HERE, on the runner: they are
+      # baked into the workflow by scripts/deploy.ts instead of being read from
+      # $env inside n8n, so the container can block env access to the nodes.
       - name: Deploy workflows into n8n (via SSH tunnel to the VPS)
         env:
           N8N_API_URL: http://127.0.0.1:5678
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
           GOOGLE_OAUTH_CRED_ID: ${{ secrets.GOOGLE_OAUTH_CRED_ID }}
           BIRTHDAY_SYNC_SCHEDULE: ${{ secrets.BIRTHDAY_SYNC_SCHEDULE }}
+          CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
+          SHOW_BIRTH_YEAR: ${{ secrets.SHOW_BIRTH_YEAR }}
         run: |
           if [ -z "$N8N_API_KEY" ]; then
             echo "N8N_API_KEY not set — n8n is up; add the secret and re-run to import workflows."

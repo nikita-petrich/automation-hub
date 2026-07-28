@@ -24,13 +24,17 @@ Die Probleme liegen fast alle in der **Kette Runner → VPS** und in der
 Keine akut ausgenutzte Lücke gefunden. Drei Punkte sollten aber vor dem
 nächsten Deploy adressiert werden (H1–H3).
 
+> **Stand heute: H1, H2 und H3 sind behoben und live.** Die Details stehen als
+> Status-Block beim jeweiligen Befund. Offen sind noch M1–M6, N1–N7 und I1–I8;
+> die empfohlene Reihenfolge dafür steht am Ende des Dokuments.
+
 ---
 
 ## Befundübersicht
 
 | # | Schwere | Bereich | Befund |
 |---|---------|---------|--------|
-| H1 | **Hoch** | Container | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` gibt Code-Nodes Zugriff auf das gesamte Prozess-Env inkl. `N8N_ENCRYPTION_KEY` |
+| H1 | ~~Hoch~~ **behoben** | Container | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` gibt Code-Nodes Zugriff auf das gesamte Prozess-Env inkl. `N8N_ENCRYPTION_KEY` |
 | H2 | ~~Hoch~~ **behoben** | Supply Chain | Kein `package-lock.json`; `npm install` mit Lifecycle-Scripts im Job, der *alle* Prod-Secrets hält |
 | H3 | ~~Hoch~~ **behoben** | CI/CD | `ssh-keyscan` ohne Host-Key-Pinning — MITM bekommt `.env` (Encryption Key + API Key) frei Haus |
 | M1 | Mittel | CI/CD | Kein `permissions:`-Block, Actions auf mutable Tags gepinnt |
@@ -53,6 +57,30 @@ nächsten Deploy adressiert werden (H1–H3).
 ## Hoch
 
 ### H1 — Code-Nodes können den Encryption Key lesen
+
+> **Status: behoben.** Der Workflow liest kein `$env` mehr — weder im Code-Node
+> noch im URL-Ausdruck von *List Managed Events*. `CALENDAR_ID` und
+> `SHOW_BIRTH_YEAR` werden zur Deploy-Zeit von `scripts/deploy.ts` in eine
+> `CONFIG:START`/`CONFIG:END`-Region eingesetzt (gleiche Mechanik wie die
+> bestehende Lib-Injection), die Kalender-ID zusätzlich URL-encodiert in die
+> Request-URL. Damit steht der Container jetzt auf
+> `N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"` **und**
+> `N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES: "true"`; die drei Workflow-Variablen
+> wurden aus dem Container-Env entfernt. Ein fehlendes `CALENDAR_ID` bricht den
+> Deploy jetzt ab, statt einen Workflow auszuliefern, der um 6 Uhr wirft.
+>
+> Gegen Rückfall abgesichert: `npm run validate` lehnt jeden Node ab, der `$env`
+> erwähnt (Textprüfung über `node.parameters`), und
+> `blueprint/context/coding-standards.md` schreibt die neue Konvention fest.
+>
+> Verifiziert über den echten Code-Pfad: gebauter Workflow enthält 0×&nbsp;`$env`,
+> `const CALENDAR_ID = "test+id@group.calendar.google.com"` korrekt als
+> JS-String-Literal, URL als `…/calendars/test%2Bid%40group.calendar.google.com/events`;
+> leeres `SHOW_BIRTH_YEAR` fällt auf `true` zurück (wie vorher im Container),
+> fehlendes `CALENDAR_ID` → Exit 1. `npm run validate` ✓, `npm test` 11/11 ✓.
+>
+> Offen bleibt die unten genannte Gegenprobe an der Live-Instanz — sie ist jetzt
+> aber nur noch Bestätigung, nicht mehr Voraussetzung.
 
 `docker-compose.yml:51` setzt `N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"`, und
 `docker-compose.yml:36` legt `N8N_ENCRYPTION_KEY` in dasselbe Prozess-Env.
@@ -208,7 +236,8 @@ Der erste Deploy bringt die Instanz öffentlich hoch
 (`docs/ci-cd.md:41` — „first-run bootstrap"), und erst danach legt man laut
 `docs/manual-setup.md:178` im Browser den n8n-Owner an. Zwischen beiden
 Schritten ist die Setup-Seite offen: Wer sie zuerst aufruft, wird Admin der
-Instanz — und hat über H1 sofort den Encryption Key.
+Instanz. (Seit H1 behoben ist, bekommt er damit nicht mehr auch noch den
+Encryption Key — aber Admin der Instanz zu sein reicht bereits.)
 
 **Fix:** In der Doku als **zeitkritisch** markieren (Owner unmittelbar nach dem
 ersten grünen Deploy anlegen), oder den Vhost bis zum Claim mit HTTP-Basic-Auth
@@ -489,7 +518,7 @@ Der Vollständigkeit halber, weil es die Bewertung der Befunde einordnet:
 |---------|---------|--------|
 | ~~1~~ | ✅ erledigt | **H3** Host-Key pinnen (`VPS_SSH_HOST_KEY`) |
 | ~~2~~ | ✅ erledigt | **H2** `package-lock.json` committen, `npm ci --ignore-scripts` |
-| 3 | 30 min | **H1** `CALENDAR_ID`/`SHOW_BIRTH_YEAR` deploy-time injizieren, Env-Zugriff blocken |
+| ~~3~~ | ✅ erledigt | **H1** `CALENDAR_ID`/`SHOW_BIRTH_YEAR` deploy-time injizieren, Env-Zugriff blocken |
 | 4 | 5 min | **M6** Execution-Retention senken, **M1** `permissions: contents: read` |
 | 5 | 15 min | **M2** `/api/v1` am Proxy sperren, **M3** Doku + 2FA |
 | 6 | 20 min | **M4** `executeOnce`, **M5** Retry/`onError`, **N2** Datumsvalidierung |
