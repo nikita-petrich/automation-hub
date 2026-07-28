@@ -116,9 +116,9 @@ Two GitHub Actions workflows:
 - **`validate.yml`** runs on every pull request / push — JSON/schema validation,
   `lib/` sync check, and unit tests. No secrets, never deploys.
 - **`deploy.yml`** runs on push to **`main`** (or via *Run workflow*): it validates,
-  then copies the repo onto the VPS over SSH (tar) and runs `docker compose up -d`
-  + `npm run deploy` there — so both infra and workflow changes go live
-  automatically. Deploys are idempotent.
+  then copies the repo onto the VPS over SSH (tar), runs `docker compose up -d`
+  there, and deploys the workflows into n8n from the runner via the public API —
+  so both infra and workflow changes go live automatically. Deploys are idempotent.
 
 All configuration lives in a GitHub **`production` Environment** (as secrets); the
 pipeline renders the VPS `.env` from it on every deploy. Full setup — deploy key,

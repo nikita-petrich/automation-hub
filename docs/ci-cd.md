@@ -7,8 +7,8 @@ push to main ─► GitHub Actions ─► validate
                                  ─► copy repo to the VPS (tar over SSH)
                                  ─► render .env on the VPS from the `production`
                                     GitHub Environment (all secrets)
-                                 ─► docker compose up -d      (starts n8n)
-                                    npm run deploy             (workflows → n8n)
+                                 ─► docker compose up -d on the VPS  (starts n8n)
+                                 ─► npm run deploy on the runner     (workflows → n8n API)
 ```
 
 - All config lives in the GitHub **`production` Environment** — you never edit
@@ -21,7 +21,8 @@ push to main ─► GitHub Actions ─► validate
 ## One-time setup
 
 ### 1. VPS prerequisites
-- Docker + Compose and Node.js (≥20) installed.
+- Docker + Compose installed (that's all — **Node is NOT needed** on the VPS; the
+  workflow import runs on the GitHub runner via the public n8n API).
 - Your reverse-proxy stack already running, and its shared network name known
   (its compose defaults to `example-net`).
 - The SSH deploy user in the `docker` group: `sudo usermod -aG docker "$USER"`

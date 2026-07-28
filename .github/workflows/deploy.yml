@@ -3,8 +3,10 @@
 # On push to `main` (or manual dispatch), GitHub Actions:
 #   1. validates the workflows (safety gate),
 #   2. copies the repo onto the VPS over SSH (tar stream),
-#   3. renders the VPS .env from the `production` Environment's secrets/variables,
-#   4. runs scripts/vps-deploy.sh: `docker compose up -d` + `npm run deploy`.
+#   3. renders the VPS .env from the `production` Environment's secrets,
+#   4. starts the stack on the VPS (docker compose up -d via vps-deploy.sh),
+#   5. deploys the workflows into n8n from the runner via the public API
+#      (so the VPS needs only Docker — no Node, no rsync).
 #
 # ALL configuration lives in the GitHub `production` Environment as SECRETS — you
 # never edit .env on the server by hand; the pipeline writes it from these:
@@ -63,6 +65,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -113,7 +119,21 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "chmod 600 '$VPS_APP_DIR/.env'"
           rm -f "$tmp"
 
-      - name: Start stack + deploy workflows on the VPS
+      - name: Start stack on the VPS
         run: |
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "cd '$VPS_APP_DIR' && bash scripts/vps-deploy.sh"
+
+      - name: Deploy workflows into n8n (runner → public API)
+        env:
+          N8N_API_URL: https://${{ secrets.DOMAIN }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+          GOOGLE_OAUTH_CRED_ID: ${{ secrets.GOOGLE_OAUTH_CRED_ID }}
+          BIRTHDAY_SYNC_SCHEDULE: ${{ secrets.BIRTHDAY_SYNC_SCHEDULE }}
+        run: |
+          if [ -z "$N8N_API_KEY" ]; then
+            echo "N8N_API_KEY not set — n8n is up; add the secret and re-run to import workflows."
+            exit 0
+          fi
+          npm install --no-audit --no-fund
+          npm run deploy

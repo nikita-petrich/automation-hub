@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# On-VPS deployment — runs ON the server, invoked over SSH by the CD pipeline
-# (.github/workflows/deploy.yml). Also safe to run by hand on the VPS.
+# On-VPS step — bring the Docker stack up. Invoked over SSH by the CD pipeline
+# (.github/workflows/deploy.yml); also safe to run by hand on the VPS.
 #
-# The CI job copies the repo (tar over SSH) and renders .env (from the GitHub `production`
-# environment) before calling this. Real secrets never live in GitHub logs.
+# The workflow import (npm run deploy) runs on the GitHub runner against the
+# public n8n API, NOT here — so the VPS needs only Docker + tar + ssh (no Node).
 #
-# Requirements on the VPS: Docker + Compose, Node.js (>=20), the SSH user in the
-# `docker` group, and your reverse proxy already running (its shared network is
-# referenced by PROXY_NETWORK in .env).
+# The CI job copies the repo (tar over SSH) and renders .env (from the GitHub
+# `production` environment) before calling this.
 # =============================================================================
 set -euo pipefail
 
@@ -33,24 +32,9 @@ for i in $(seq 1 40); do
     break
   fi
   if [ "$i" -eq 40 ]; then
-    echo "    WARNING: n8n not healthy after waiting; continuing" >&2
+    echo "    WARNING: n8n not healthy after waiting" >&2
   fi
   sleep 3
 done
 
-# Deploy workflows only once the n8n API key exists (created once in the n8n UI).
-api_key="$(grep -E '^N8N_API_KEY=' .env | head -1 | cut -d= -f2- || true)"
-if [ -z "${api_key}" ]; then
-  echo "==> N8N_API_KEY not set yet — stack is up, skipping workflow deploy."
-  echo "    Create the n8n owner + API key in the browser, add N8N_API_KEY and"
-  echo "    GOOGLE_OAUTH_CRED_ID to the 'production' environment, then re-deploy."
-  exit 0
-fi
-
-echo "==> Install deploy tooling"
-npm install --no-audit --no-fund --silent
-
-echo "==> Deploy workflows into n8n (idempotent upsert)"
-npm run deploy
-
-echo "==> Deployment complete"
+echo "==> Stack is up"
