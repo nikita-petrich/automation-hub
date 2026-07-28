@@ -116,7 +116,7 @@ Two GitHub Actions workflows:
 - **`validate.yml`** runs on every pull request / push — JSON/schema validation,
   `lib/` sync check, and unit tests. No secrets, never deploys.
 - **`deploy.yml`** runs on push to **`main`** (or via *Run workflow*): it validates,
-  then `rsync`s the repo onto the VPS over SSH and runs `docker compose up -d`
+  then copies the repo onto the VPS over SSH (tar) and runs `docker compose up -d`
   + `npm run deploy` there — so both infra and workflow changes go live
   automatically. Deploys are idempotent.
 

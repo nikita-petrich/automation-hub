@@ -4,7 +4,7 @@ Every push to **`main`** deploys the whole stack to your VPS automatically:
 
 ```
 push to main ─► GitHub Actions ─► validate
-                                 ─► rsync repo to the VPS (over SSH)
+                                 ─► copy repo to the VPS (tar over SSH)
                                  ─► render .env on the VPS from the `production`
                                     GitHub Environment (all secrets)
                                  ─► docker compose up -d      (starts n8n)

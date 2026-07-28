@@ -3,7 +3,7 @@
 # On-VPS deployment — runs ON the server, invoked over SSH by the CD pipeline
 # (.github/workflows/deploy.yml). Also safe to run by hand on the VPS.
 #
-# The CI job rsyncs the repo and renders .env (from the GitHub `production`
+# The CI job copies the repo (tar over SSH) and renders .env (from the GitHub `production`
 # environment) before calling this. Real secrets never live in GitHub logs.
 #
 # Requirements on the VPS: Docker + Compose, Node.js (>=20), the SSH user in the

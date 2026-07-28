@@ -2,7 +2,7 @@
 # =============================================================================
 # On push to `main` (or manual dispatch), GitHub Actions:
 #   1. validates the workflows (safety gate),
-#   2. rsyncs the repo onto the VPS over SSH,
+#   2. copies the repo onto the VPS over SSH (tar stream),
 #   3. renders the VPS .env from the `production` Environment's secrets/variables,
 #   4. runs scripts/vps-deploy.sh: `docker compose up -d` + `npm run deploy`.
 #
@@ -72,13 +72,13 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Sync repository to the VPS (keeps the rendered .env)
+      - name: Sync repository to the VPS (tar over SSH; keeps the rendered .env)
         run: |
-          rsync -az --delete \
-            --exclude '.git' --exclude 'node_modules' --exclude '.env' \
-            --exclude 'backups' --exclude 'dist' \
-            -e "ssh -i ~/.ssh/id_deploy -p $VPS_PORT" \
-            ./ "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/"
+          tar czf - \
+            --exclude='./.git' --exclude='./node_modules' \
+            --exclude='./backups' --exclude='./dist' --exclude='./.env' . \
+          | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+              "mkdir -p '$VPS_APP_DIR' && tar xzf - -C '$VPS_APP_DIR'"
 
       - name: Render .env on the VPS from the production Environment
         env:
