@@ -6,6 +6,11 @@
 - [x] **birthday-sync** — sync Google Contacts birthdays into a Google Calendar as
       yearly all-day events (idempotent). → `workflows/birthday-sync/`,
       archived spec: `history/features/birthday-sync.md`.
+- [ ] **error-notify** — central alerting: an `Error Trigger` workflow that pushes every
+      failed production execution to Telegram, auto-wired into every workflow via
+      `settings.errorWorkflow` at deploy time; plus node-level retries and an external
+      dead-man's-switch heartbeat so a *silent* hub (container/VPS down, workflow
+      deactivated) is caught too. Spec: `context/current-feature.md`.
 - [ ] _(next workflow — add it here, then run `/new-workflow`)_
 
 ## Backlog / ideas
