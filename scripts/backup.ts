@@ -47,7 +47,7 @@ async function fetchAll(base: string, key: string): Promise<any[]> {
       headers: { 'X-N8N-API-KEY': key, accept: 'application/json' },
     });
     if (!res.ok) throw new Error(`GET /workflows -> ${res.status} ${res.statusText}: ${(await res.text()).slice(0, 300)}`);
-    const page = await res.json();
+    const page = (await res.json()) as any;
     out.push(...(page.data ?? []));
     cursor = page.nextCursor;
   } while (cursor);

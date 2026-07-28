@@ -33,7 +33,9 @@ The `deploy` job (which `needs: validate`) runs on a GitHub-hosted runner:
    extracts it on the VPS (`tar` is on every Linux, so the VPS needs no `rsync`).
    Excludes `.git`, `node_modules`, `.env`, `backups`, `dist`.
 3. **Render `.env` on the VPS** — builds the `.env` from the `production` environment
-   secrets and `scp`s it to the VPS (chmod 600). You never hand-edit `.env` there.
+   secrets and pipes it straight into `install -m 600` on the VPS, so the file is
+   created `0600` in one atomic step (no world-readable window, no secret tempfile
+   left on the runner). You never hand-edit `.env` there.
 4. **Start stack on the VPS** — over SSH runs `scripts/vps-deploy.sh`, which does
    `docker compose pull && up -d` and waits for the n8n container to be healthy.
    *(The VPS needs only Docker — no Node, no rsync.)*
@@ -88,8 +90,9 @@ break at its next scheduled run.
   time instead, and `npm run validate` fails on any workflow that reintroduces
   `$env`. `N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=true` closes the matching route via
   `~/.n8n` (config file + SQLite database).
-- Optional: add **required reviewers** to the `production` environment (Settings →
-  Environments) to gate deploys behind an approval.
+- Add **required reviewers** to the `production` environment (Settings →
+  Environments) and protect `main` — anyone who can deploy can read the secrets
+  indirectly, and `main` deploys automatically.
 
 ## Operations
 

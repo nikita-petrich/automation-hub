@@ -1,0 +1,4 @@
+# Default owner for everything in this repo. Combined with branch protection on
+# `main` (which auto-deploys to production), this requires the owner's review on
+# every change. See docs/security-review.md (I3).
+* @nikita-petrich

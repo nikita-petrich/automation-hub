@@ -54,8 +54,13 @@ services:
       # --- Privacy / housekeeping -----------------------------------------
       N8N_DIAGNOSTICS_ENABLED: "false" # no telemetry
       N8N_PERSONALIZATION_ENABLED: "false" # skip the personalization survey
-      EXECUTIONS_DATA_PRUNE: "true" # don't keep execution history forever
-      EXECUTIONS_DATA_MAX_AGE: "336" # prune runs older than 336h (14 days)
+      # Execution data holds every node's full I/O — i.e. all contact names and
+      # birthdays in cleartext (the encryption key protects only credentials).
+      # Keep none on success, keep failures briefly for debugging.
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: "none"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+      EXECUTIONS_DATA_MAX_AGE: "72" # prune retained (error) runs after 72h (3 days)
 
       # NOTE: CALENDAR_ID / SHOW_BIRTH_YEAR / BIRTHDAY_SYNC_SCHEDULE are
       # deliberately NOT passed to the container. They are baked into the
@@ -66,6 +71,18 @@ services:
       - n8n_data:/home/node/.n8n
     networks:
       - proxy
+    security_opt:
+      - "no-new-privileges:true"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          pids: 512
     healthcheck:
       test:
         [

@@ -572,7 +572,48 @@ Der Vollständigkeit halber, weil es die Bewertung der Befunde einordnet:
 | ~~1~~ | ✅ erledigt | **H3** Host-Key pinnen (`VPS_SSH_HOST_KEY`) |
 | ~~2~~ | ✅ erledigt | **H2** `package-lock.json` committen, `npm ci --ignore-scripts` |
 | ~~3~~ | ✅ erledigt | **H1** `CALENDAR_ID`/`SHOW_BIRTH_YEAR` deploy-time injizieren, Env-Zugriff blocken |
-| 4 | 5 min | **M6** Execution-Retention senken _(M1 erledigt)_ |
-| 5 | 15 min | **M2** `/api/v1` am Proxy sperren, **M3** Doku + 2FA |
+| ~~4~~ | ✅ erledigt | **M6** Execution-Retention senken, **M1** Actions SHA-pinnen (Rest von M1) |
+| 5 | ⏳ Doku | **M2** `/api/v1` am Proxy sperren, **M3** Doku + 2FA |
 | ~~6~~ | ✅ erledigt | **M4** `executeOnce`, **M5** Retry, **N2** Datumsvalidierung, **N3** `await` |
-| 7 | Rest | N1, N4–N7, I1–I3 + Error-Workflow für M5 |
+| ~~7~~ | ✅ meist erledigt | N1, N4, N6, N7, I2, I3, I6 erledigt; N5 + I1 dokumentiert |
+
+Details der letzten Runde unten.
+
+---
+
+## Implementation status — round 3 (security-hardening PR)
+
+H1–H3 (PRs #2, #4) and M1(permissions)/M4/M5/N2/N3 (PR #5) are already on `main`.
+This PR adds the remaining code-level findings on top and documents the operator
+actions. Nothing here reintroduces `$env` (CI enforces it).
+
+### Fixed in code (this PR)
+
+| # | What changed | Where |
+|---|--------------|-------|
+| **M1** (rest) | GitHub Actions pinned to commit SHAs (permissions/timeout already landed in #5) | both workflows |
+| **M6** | `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none`, `SAVE_ON_ERROR=all`, `MAX_AGE=72` | `docker-compose.yml` |
+| **N1** | `.env` piped into `install -m 600 /dev/stdin` (atomic 0600, no tempfile/scp window) | `deploy.yml` |
+| **N4** | `no-new-privileges`, json-file log rotation (10m×3), `memory: 1g` / `pids: 512` | `docker-compose.yml` |
+| **N6** | Deploy gate also runs `typecheck` + `npm test`; `package.json`/`package-lock.json` in `paths:`; tunnel torn down via a control socket in an `if: always()` step | `deploy.yml` |
+| **N7** | README secret model corrected; `.env.example` uses a placeholder calendar id | `README.md`, `.env.example` |
+| **I2** | `typecheck: tsc --noEmit` script, run in CI (repo type-checks clean; `typescript` added to the locked tree) | `package.json`, both workflows |
+| **I3** | `.github/dependabot.yml` (actions + npm + docker) and `.github/CODEOWNERS` | new files |
+| **I6** | No credential id → the `credentials` block is omitted entirely (no dangling `REPLACE_WITH_CRED_ID`) | `scripts/deploy.ts` |
+
+### Operator action (documented, not code)
+
+| # | Action | Where documented |
+|---|--------|------------------|
+| **M2** | Block/allowlist `/api/v1` and rate-limit `/rest/login` at the reverse proxy | [manual-setup.md §10a](manual-setup.md) |
+| **M3** | Claim the n8n owner immediately after the first deploy; enable 2FA | [manual-setup.md §7](manual-setup.md) |
+| **N5** | Remove files deleted from the repo on the VPS by hand (tar deploy never deletes) | [manual-setup.md §10a](manual-setup.md) |
+| **I1** | Cron a Docker-volume backup; keep `N8N_ENCRYPTION_KEY` in a password manager | [manual-setup.md §10a](manual-setup.md) |
+| — | Add branch protection + *required reviewers* on `production` (auto-deploys) | [ci-cd.md](ci-cd.md), README |
+
+### Acknowledged, no change
+
+- **I4 (TZ mix)** — harmless at the default `0 6 * * *` schedule.
+- **I5 (quoting)** — remote paths are single-quoted; the values are your own secrets.
+- **I7 (no delete path)** and **I8 (32-bit signature)** — deliberate, in scope, no action.
+- **M5 error-workflow** — the retry/`onError` part is done (#5); a notify workflow is left for a future change.

@@ -182,9 +182,15 @@ adapted from [ai-blueprint](https://github.com/bradtraversy/ai-blueprint):
   network), plus a `127.0.0.1` loopback port for the on-host deploy script.
 - `N8N_ENCRYPTION_KEY` encrypts stored credentials at rest — set it once and keep
   it safe; losing or changing it makes existing credentials unreadable.
-- `validate.yml` needs no secrets. `deploy.yml` uses only an SSH deploy key
-  (`VPS_SSH_KEY`) to reach the VPS — all n8n/Google secrets stay in the VPS `.env`,
-  never in GitHub. See [docs/ci-cd.md](docs/ci-cd.md).
+- `validate.yml` needs no secrets. `deploy.yml` reads all configuration from the
+  GitHub **`production` Environment** (secrets, masked in logs) — including
+  `N8N_ENCRYPTION_KEY`, `N8N_API_KEY` and `GOOGLE_OAUTH_CRED_ID` — and renders the
+  VPS `.env` from them on every deploy. Restrict who can push to `main` / add
+  *required reviewers* on the environment, since anyone who can deploy can read
+  those values indirectly. See [docs/ci-cd.md](docs/ci-cd.md).
+- Code/expression nodes run with `N8N_BLOCK_ENV_ACCESS_IN_NODE=true`, so a
+  workflow cannot read the container's env (e.g. the encryption key); the two
+  non-secret values it needs are injected at deploy time by `scripts/deploy.ts`.
 
 ## License
 

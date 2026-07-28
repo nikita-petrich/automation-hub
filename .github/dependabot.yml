@@ -1,0 +1,28 @@
+# Automated dependency updates. Without this the stack ages unnoticed —
+# especially the pinned n8n image and the SHA-pinned GitHub Actions, which never
+# move on their own. See docs/security-review.md (I3).
+version: 2
+updates:
+  # GitHub Actions — bumps the commit-SHA pins in .github/workflows/*.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # npm devDependencies (tsx, typescript, @types/node).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-dev:
+        patterns: ["*"]
+
+  # The n8n image tag pinned in docker-compose.yml.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
