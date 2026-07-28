@@ -31,8 +31,8 @@ nächsten Deploy adressiert werden (H1–H3).
 | # | Schwere | Bereich | Befund |
 |---|---------|---------|--------|
 | H1 | **Hoch** | Container | `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` gibt Code-Nodes Zugriff auf das gesamte Prozess-Env inkl. `N8N_ENCRYPTION_KEY` |
-| H2 | **Hoch** | Supply Chain | Kein `package-lock.json`; `npm install` mit Lifecycle-Scripts im Job, der *alle* Prod-Secrets hält |
-| H3 | **Hoch** | CI/CD | `ssh-keyscan` ohne Host-Key-Pinning — MITM bekommt `.env` (Encryption Key + API Key) frei Haus |
+| H2 | ~~Hoch~~ **behoben** | Supply Chain | Kein `package-lock.json`; `npm install` mit Lifecycle-Scripts im Job, der *alle* Prod-Secrets hält |
+| H3 | ~~Hoch~~ **behoben** | CI/CD | `ssh-keyscan` ohne Host-Key-Pinning — MITM bekommt `.env` (Encryption Key + API Key) frei Haus |
 | M1 | Mittel | CI/CD | Kein `permissions:`-Block, Actions auf mutable Tags gepinnt |
 | M2 | Mittel | Exposure | n8n Public API (`/api/v1`) und `/rest` sind öffentlich erreichbar, obwohl nichts sie braucht |
 | M3 | Mittel | Betrieb | Owner-Claim-Fenster: Instanz ist online, bevor der Admin-Account existiert |
@@ -86,6 +86,13 @@ Alternative ohne Code-Änderung: n8n *Variables* statt `$env` verwenden.
 
 ### H2 — Kein Lockfile, `npm install` im Secret-Job
 
+> **Status: behoben.** `package-lock.json` ist committet, beide Workflows nutzen
+> `npm ci --ignore-scripts`, und der Install im `deploy`-Job wurde vor die
+> SSH-Konfiguration gezogen — er läuft jetzt ohne step-scoped Secrets und ohne
+> offenen Tunnel. Dass `--ignore-scripts` `tsx` nicht bricht, wurde geprüft
+> (esbuild bezieht seine Plattform-Binary über `optionalDependencies`):
+> `npm ci --ignore-scripts` → `npm run validate` ✓, `npm test` 11/11 ✓.
+
 Es gibt kein `package-lock.json` (verifiziert). `deploy.yml:54` und
 `deploy.yml:145` sowie `validate.yml:24` rufen `npm install --no-audit`.
 
@@ -107,6 +114,13 @@ irgendwo in der Kette bekommt alles davon in einem Schritt.
    den `deploy`-Job reichen, damit im Secret-Job überhaupt kein npm mehr läuft.
 
 ### H3 — Kein Host-Key-Pinning für die Deploy-Verbindung
+
+> **Status: behoben.** Der Host-Key wird aus dem neuen Secret
+> `VPS_SSH_HOST_KEY` in `~/.ssh/known_hosts` gepinnt, dazu global
+> `StrictHostKeyChecking yes`. Fehlt das Secret, bricht der Job mit einer
+> erklärenden Meldung ab, statt einen ungeprüften Key zu akzeptieren.
+> **Aktion nötig:** Das Secret muss vor dem nächsten Deploy angelegt werden
+> (`ssh-keyscan -p <port> <host>`), sonst schlägt die Pipeline fehl.
 
 ```yaml
 # .github/workflows/deploy.yml:80
@@ -473,8 +487,8 @@ Der Vollständigkeit halber, weil es die Bewertung der Befunde einordnet:
 
 | Schritt | Aufwand | Befund |
 |---------|---------|--------|
-| 1 | 5 min | **H3** Host-Key pinnen (`VPS_SSH_HOST_KEY`) |
-| 2 | 10 min | **H2** `package-lock.json` committen, `npm ci --ignore-scripts` |
+| ~~1~~ | ✅ erledigt | **H3** Host-Key pinnen (`VPS_SSH_HOST_KEY`) |
+| ~~2~~ | ✅ erledigt | **H2** `package-lock.json` committen, `npm ci --ignore-scripts` |
 | 3 | 30 min | **H1** `CALENDAR_ID`/`SHOW_BIRTH_YEAR` deploy-time injizieren, Env-Zugriff blocken |
 | 4 | 5 min | **M6** Execution-Retention senken, **M1** `permissions: contents: read` |
 | 5 | 15 min | **M2** `/api/v1` am Proxy sperren, **M3** Doku + 2FA |

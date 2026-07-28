@@ -23,8 +23,12 @@ Two workflow files:
 
 The `deploy` job (which `needs: validate`) runs on a GitHub-hosted runner:
 
-1. **Configure SSH** — writes the `VPS_SSH_KEY` secret to a key file and
-   `ssh-keyscan`s the host.
+0. **Install dependencies** — `npm ci --ignore-scripts`, deliberately placed
+   *before* the deploy key, the tunnel and the step-scoped secrets exist.
+1. **Configure SSH** — writes the `VPS_SSH_KEY` secret to a key file and pins the
+   VPS host key from the `VPS_SSH_HOST_KEY` secret into `~/.ssh/known_hosts`.
+   The job fails if that secret is missing, rather than trusting an unverified
+   host key.
 2. **Sync repository to the VPS** — streams the repo as a `tar` archive over SSH and
    extracts it on the VPS (`tar` is on every Linux, so the VPS needs no `rsync`).
    Excludes `.git`, `node_modules`, `.env`, `backups`, `dist`.
@@ -60,8 +64,16 @@ node, and activates the workflow. It's idempotent — repeated deploys never dup
   the VPS `~/.ssh/authorized_keys`. Alternative: a **self-hosted runner** on the VPS.
 - `N8N_ENCRYPTION_KEY`, `N8N_API_KEY`, `VPS_SSH_KEY` are GitHub environment secrets
   (masked in logs). Rotate them if exposed.
-- `ssh-keyscan` trusts the host key on first contact; for stricter security, store the
-  host key in a secret and write it to `~/.ssh/known_hosts` instead.
+- The VPS **host key is pinned** from the `VPS_SSH_HOST_KEY` secret; the runner never
+  learns it on the fly. This is what stops someone who can redirect the
+  runner → VPS connection from receiving the rendered `.env` (encryption key +
+  API key) and a shell as the deploy user. Rebuilding the VPS changes its host key
+  and will (correctly) fail the deploy until the secret is updated — see
+  [manual-setup.md §5a](manual-setup.md#5a-ssh-deploy-key--on-your-laptop).
+- **Dependencies are pinned** by `package-lock.json` and installed with
+  `npm ci --ignore-scripts`, in a step that runs before any step-scoped secret or
+  the SSH tunnel exists. A compromised package therefore has neither the
+  production secrets nor a route to the VPS.
 - Optional: add **required reviewers** to the `production` environment (Settings →
   Environments) to gate deploys behind an approval.
 

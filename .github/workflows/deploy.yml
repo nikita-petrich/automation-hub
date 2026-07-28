@@ -51,7 +51,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install --no-audit --no-fund
+          cache: npm
+      - run: npm ci --ignore-scripts
       - run: npm run validate
 
   deploy:
@@ -69,15 +70,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
+      # Dependencies are installed here, up front: before the deploy key is on
+      # disk, before the SSH tunnel exists, and without any of the step-scoped
+      # secrets (VPS_SSH_KEY, N8N_ENCRYPTION_KEY, N8N_API_KEY) in the
+      # environment. --ignore-scripts additionally blocks install lifecycle
+      # hooks; tsx/esbuild resolve their platform binary through
+      # optionalDependencies and do not need them.
+      - name: Install dependencies (before any step-scoped secret is in scope)
+        run: npm ci --ignore-scripts
+
+      # The host key is PINNED from a secret, never learned on the fly. Without it
+      # an attacker able to redirect runner -> VPS traffic would receive the
+      # rendered .env (encryption key + API key) and a shell as the deploy user.
+      # Capture the value once, from a trusted network:
+      #     ssh-keyscan -p <VPS_PORT> <VPS_HOST>
+      # and store the output verbatim as the VPS_SSH_HOST_KEY secret. Use the same
+      # host string as VPS_HOST — known_hosts entries are keyed on it (a non-default
+      # port is recorded as `[host]:port`).
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
         run: |
+          if [ -z "$VPS_SSH_HOST_KEY" ]; then
+            echo "::error::VPS_SSH_HOST_KEY is not set in the 'production' environment. Capture it with: ssh-keyscan -p ${VPS_PORT} <VPS_HOST>"
+            exit 1
+          fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          # Belt and braces: even if a later step forgets -o, ssh must not fall
+          # back to prompting or to trust-on-first-use.
+          printf 'Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile ~/.ssh/known_hosts\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Sync repository to the VPS (tar over SSH; keeps the rendered .env)
         run: |
@@ -142,6 +171,7 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" \
             -o ExitOnForwardFailure=yes -f -N \
             -L 127.0.0.1:5678:127.0.0.1:5678 "$VPS_USER@$VPS_HOST"
-          npm install --no-audit --no-fund
+          # Dependencies were installed in an earlier step, before the secrets
+          # and the tunnel existed — nothing to install here.
           npm run deploy
           pkill -f "ssh.*-L 127.0.0.1:5678:127.0.0.1:5678" || true

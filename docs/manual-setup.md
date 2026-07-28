@@ -133,6 +133,24 @@ ssh-copy-id -i ~/.ssh/automation-hub-deploy.pub <vps-user>@<vps-ip>
 This lets GitHub Actions log in to the VPS non-interactively. Use a dedicated key
 (easy to revoke by removing its line from the VPS `~/.ssh/authorized_keys`).
 
+Now capture the VPS's **host key**, so the runner can verify it is talking to the
+right machine instead of trusting whatever answers:
+
+```bash
+ssh-keyscan -p 22 <vps-ip>          # use your VPS_PORT if it isn't 22
+```
+
+Copy the **entire output** into the `VPS_SSH_HOST_KEY` secret below. Two things
+matter: run this from a network you trust (it is a
+trust-on-first-use moment — do it once, deliberately, rather than on every
+deploy), and use the **same host string** you put in `VPS_HOST`, because
+`known_hosts` entries are keyed on it. A non-default port is recorded as
+`[<host>]:<port>`, which `ssh-keyscan -p` already handles for you.
+
+If you ever rebuild the VPS, its host key changes and the deploy will fail with
+`REMOTE HOST IDENTIFICATION HAS CHANGED` — that is the control working. Re-run
+the command above and update the secret.
+
 ### 5b. Create the environment 🔴
 Repo → **Settings → Environments → New environment** → `production`. Add everything
 as **secrets** (Add environment secret):
@@ -140,6 +158,7 @@ as **secrets** (Add environment secret):
 | Secret | Value |
 |--------|-------|
 | `VPS_SSH_KEY` | the **private** key `~/.ssh/automation-hub-deploy` (full text) |
+| `VPS_SSH_HOST_KEY` | the full `ssh-keyscan` output from step 5a — **required**, the deploy fails without it |
 | `VPS_HOST` | `<vps-ip>` |
 | `VPS_USER` | your SSH user |
 | `N8N_ENCRYPTION_KEY` | `openssl rand -hex 32` — generate once, **keep forever** |

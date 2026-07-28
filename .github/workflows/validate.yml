@@ -19,9 +19,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
+      # `npm ci` installs exactly the tree in package-lock.json (with integrity
+      # hashes); --ignore-scripts blocks install lifecycle hooks, which matters
+      # here because this job also runs on pull requests from forks.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --ignore-scripts
 
       - name: Validate workflows (JSON, schema, lib sync)
         run: npm run validate
