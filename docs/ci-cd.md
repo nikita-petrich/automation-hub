@@ -3,101 +3,101 @@
 Every push to **`main`** deploys the whole stack to your VPS automatically:
 
 ```
-push to main ─► GitHub Actions ─► validate ─► rsync repo to VPS (over SSH)
-                                              └─► docker compose up -d   (infra)
-                                                  npm run deploy         (workflows → n8n)
+push to main ─► GitHub Actions ─► validate
+                                 ─► rsync repo to the VPS (over SSH)
+                                 ─► render .env on the VPS from the `production`
+                                    GitHub Environment (secrets + variables)
+                                 ─► docker compose up -d      (starts n8n)
+                                    npm run deploy             (workflows → n8n)
 ```
 
-- Pull requests and feature branches run **validation only** (`validate.yml`, no secrets).
-- The n8n / Google secrets **never** leave the VPS — they live in the VPS-local
-  `.env`. GitHub only holds the SSH access to the server.
-- Deployment is idempotent (workflows upsert by name; `docker compose up -d` is a
+- All config lives in the GitHub **`production` Environment** — you never edit
+  `.env` on the server by hand; the pipeline renders it on every deploy.
+- TLS/routing is handled by your **existing `nginx-auto-ssl` reverse proxy**; n8n
+  joins its shared Docker network. This repo ships no proxy.
+- Deploys are idempotent (workflow upsert by name; `docker compose up -d` is a
   no-op when nothing changed).
 
 ## One-time setup
 
-### 0. Prerequisite: the VPS is already bootstrapped
-Do the one-time manual setup from [manual-setup.md](manual-setup.md) first: Docker +
-Node installed, the repo cloned to `~/automation-hub`, `.env` filled in, the stack
-started once, and the n8n owner account + Google OAuth2 credential + n8n API key
-created (those are browser steps that cannot be automated). CD then handles every
-deploy after that.
+### 1. VPS prerequisites
+- Docker + Compose and Node.js (≥20) installed.
+- Your reverse-proxy stack already running, and its shared network name known
+  (its compose defaults to `example-net`).
+- The SSH deploy user in the `docker` group: `sudo usermod -aG docker "$USER"`
+  (then log out/in once).
+- DNS: an A record for your n8n hostname → the VPS IP.
 
-Also make sure the SSH user may use Docker without sudo:
-```bash
-sudo usermod -aG docker "$USER"   # then log out/in once
+### 2. Point your reverse proxy at n8n
+In your **reverse-proxy** repo's `compose.yml`, add n8n to `SITES` and
+`ALLOWED_DOMAINS` (semicolon-separated), then restart that stack:
+```yaml
+    environment:
+      ALLOWED_DOMAINS: "yourexisting.de;n8n.yourdomain.de"
+      SITES: "yourexisting.de=web:3000;n8n.yourdomain.de=automation-hub-n8n:5678"
 ```
+n8n's container is `automation-hub-n8n` on port `5678`, on the same network.
 
-### 1. Create a dedicated SSH deploy key
-On your laptop (not the server):
+### 3. Create a dedicated SSH deploy key (on your laptop)
 ```bash
 ssh-keygen -t ed25519 -C "automation-hub-deploy" -f ~/.ssh/automation-hub-deploy -N ""
-```
-Add the **public** key to the VPS user's authorized keys:
-```bash
 ssh-copy-id -i ~/.ssh/automation-hub-deploy.pub <vps-user>@<vps-host>
-# or append the contents of automation-hub-deploy.pub to ~/.ssh/authorized_keys on the VPS
 ```
 
-### 2. Add GitHub secrets & variables
-Repo → **Settings → Secrets and variables → Actions**.
+### 4. Create the GitHub `production` Environment
+Repo → **Settings → Environments → New environment** → `production`. Add:
 
-**Secrets** (New repository secret):
+**Secrets** (masked):
 | Name | Value |
 |------|-------|
-| `VPS_SSH_KEY` | the **private** key: contents of `~/.ssh/automation-hub-deploy` |
-| `VPS_HOST` | your server IP or hostname |
-| `VPS_USER` | the SSH user on the VPS |
+| `VPS_SSH_KEY` | the **private** key `~/.ssh/automation-hub-deploy` |
+| `VPS_HOST` | server IP / hostname |
+| `VPS_USER` | SSH user |
+| `N8N_ENCRYPTION_KEY` | `openssl rand -hex 32` (generate once, keep forever) |
+| `N8N_API_KEY` | *(added after step 6)* |
 
-**Variables** (optional — Variables tab):
-| Name | Default | Value |
-|------|---------|-------|
-| `VPS_PORT` | `22` | SSH port, if non-standard |
-| `VPS_APP_DIR` | `automation-hub` | repo path on the VPS, relative to the user's home |
+**Variables** (plain):
+| Name | Value |
+|------|-------|
+| `DOMAIN` | your n8n hostname, e.g. `n8n.yourdomain.de` |
+| `PROXY_NETWORK` | your reverse proxy's Docker network name (e.g. `example-net`) |
+| `CALENDAR_ID` | target Google calendar id |
+| `GOOGLE_OAUTH_CRED_ID` | *(added after step 6)* |
+| `BIRTHDAY_SYNC_SCHEDULE` | optional, default `0 6 * * *` |
+| `SHOW_BIRTH_YEAR` | optional, default `true` |
+| `N8N_IMAGE_TAG` | optional, default `2.31.4` |
+| `VPS_PORT` / `VPS_APP_DIR` | optional (defaults `22` / `automation-hub`) |
 
-### 3. Establish the `main` branch
-CD deploys from `main`. Promote the current branch to `main` and make it the
-default branch:
+### 5. Promote `main` and first deploy
 ```bash
-# from a clone of the repo:
-git checkout claude/automation-hub-n8n-setup-sg12v4
-git branch -M main            # or: git checkout -b main
-git push -u origin main
+git branch -M main && git push -u origin main   # from a clone of the repo
 ```
-Then GitHub → **Settings → Branches** → set **`main`** as the default branch. On
-the **VPS**, make sure the checkout tracks `main` (the pipeline overwrites files
-via rsync, so the branch there only matters for manual use).
+(GitHub → Settings → Branches → default branch = `main`.) The pipeline runs: it
+brings n8n up. Until `N8N_API_KEY` is set the workflow deploy is **skipped**
+(with a message) — that's expected.
 
-## How a deploy runs
+### 6. One-time browser steps, then finish
+Open `https://<DOMAIN>` (your proxy now serves it): create the **n8n owner**,
+create + authorize the **Google OAuth2 credential**, and generate an **n8n API
+key** (Settings → n8n API). Then:
+- add secret **`N8N_API_KEY`** and variable **`GOOGLE_OAUTH_CRED_ID`** to the
+  `production` environment,
+- re-run the deploy (Actions → *deploy* → **Run workflow**, or push to `main`).
 
-1. You push to `main` (or click **Run workflow** on the *deploy* action for a
-   manual run).
-2. The **validate** job installs deps and runs `npm run validate`.
-3. The **deploy** job opens SSH to the VPS, `rsync`s the repo there (excluding
-   `.env`, `node_modules`, `backups`, `.git`, `dist`), then runs
-   `scripts/vps-deploy.sh`, which does `docker compose pull && up -d`, waits for
-   n8n to be healthy, and runs `npm run deploy`.
-
-Watch progress under the repo's **Actions** tab.
+Done — the workflow deploys and activates, and every future push to `main`
+redeploys automatically.
 
 ## Security notes
-
-- The SSH key grants the runner shell access to the VPS user (which can drive
-  Docker). Use a **dedicated** deploy key and a non-root user. For extra
-  hardening, restrict the key in `authorized_keys` with a forced command, or run
-  a **self-hosted GitHub runner** on the VPS instead of exposing SSH (then the
-  `deploy` job's `runs-on` points at your runner and the rsync/SSH steps become
-  local commands).
-- `ssh-keyscan` trusts the host key on first contact. For stricter security,
-  pin the VPS host key by storing it in a `VPS_KNOWN_HOSTS` secret and writing it
-  to `~/.ssh/known_hosts` instead of running `ssh-keyscan`.
-- Rotate `VPS_SSH_KEY` if it is ever exposed; remove the corresponding line from
-  the VPS `authorized_keys`.
+- The SSH key grants the runner shell access to the VPS user (which drives
+  Docker). Use a dedicated key + non-root user. Alternative: a **self-hosted
+  runner** on the VPS instead of inbound SSH.
+- `N8N_ENCRYPTION_KEY` and `N8N_API_KEY` live in GitHub as environment secrets
+  (masked in logs). Rotate them if exposed.
+- `ssh-keyscan` trusts the host key on first contact; for stricter security pin
+  it via a `VPS_KNOWN_HOSTS` secret.
 
 ## Rollback
-
-Because the repo is the source of truth, rolling back is a git revert:
+The repo is the source of truth, so rollback is a git revert:
 ```bash
-git revert <bad-commit>   # or reset main to a known-good commit
-git push origin main      # CD redeploys the previous state
+git revert <bad-commit> && git push origin main   # CD redeploys the previous state
 ```

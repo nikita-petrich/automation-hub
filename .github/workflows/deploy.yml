@@ -1,26 +1,28 @@
 # Continuous deployment — deploy the WHOLE stack to the VPS.
 # =============================================================================
-# On push to `main` (your production branch), GitHub Actions:
+# On push to `main` (or manual dispatch), GitHub Actions:
 #   1. validates the workflows (safety gate),
-#   2. rsyncs the repository onto the VPS over SSH (preserving the VPS-local
-#      .env, node_modules and backups),
-#   3. runs scripts/vps-deploy.sh there: `docker compose up -d` (applies infra
-#      changes) + `npm run deploy` (idempotent workflow upsert into n8n).
+#   2. rsyncs the repo onto the VPS over SSH,
+#   3. renders the VPS .env from the `production` Environment's secrets/variables,
+#   4. runs scripts/vps-deploy.sh: `docker compose up -d` + `npm run deploy`.
 #
-# Pull requests / feature branches only run validate.yml (no secrets, no deploy).
+# ALL configuration lives in the GitHub `production` Environment — you never edit
+# .env on the server by hand; the pipeline writes it from these values:
 #
-# Required repository configuration (Settings -> Secrets and variables -> Actions)
-#   Secrets:
-#     VPS_SSH_KEY   private SSH key whose PUBLIC key is in the VPS user's
-#                   ~/.ssh/authorized_keys (use a dedicated deploy key)
-#     VPS_HOST      server IP or hostname
-#     VPS_USER      SSH user on the VPS (must be in the `docker` group)
-#   Variables (optional):
-#     VPS_PORT      SSH port (default 22)
-#     VPS_APP_DIR   repo path on the VPS, relative to the user's home
-#                   (default: automation-hub)
+#   Environment SECRETS (masked)          Environment VARIABLES (plain)
+#   ----------------------------          -----------------------------
+#   VPS_SSH_KEY   private deploy key       DOMAIN            n8n hostname (required)
+#   VPS_HOST      server IP/hostname       CALENDAR_ID       target calendar
+#   VPS_USER      ssh user                 GOOGLE_OAUTH_CRED_ID  n8n credential id
+#   N8N_ENCRYPTION_KEY  (openssl rand)     BIRTHDAY_SYNC_SCHEDULE  cron (optional)
+#   N8N_API_KEY   n8n Public API key       SHOW_BIRTH_YEAR   true/false (optional)
+#                                          PROXY_NETWORK  reverse-proxy net name
+#                                          N8N_IMAGE_TAG (optional)
+#                                          VPS_PORT / VPS_APP_DIR (optional)
 #
-# All n8n / Google secrets stay in the VPS-local .env — never in GitHub.
+# N8N_API_KEY + GOOGLE_OAUTH_CRED_ID come from the n8n UI (one-time browser step);
+# until N8N_API_KEY is set, the stack still comes up and the workflow deploy is
+# skipped with a clear message. See docs/ci-cd.md.
 # =============================================================================
 name: deploy
 
@@ -32,12 +34,10 @@ on:
       - "lib/**"
       - "scripts/**"
       - "docker-compose.yml"
-      - "Caddyfile"
       - ".env.example"
       - ".github/workflows/deploy.yml"
   workflow_dispatch: {}
 
-# Never let two deploys race against the same server.
 concurrency:
   group: deploy-vps
   cancel-in-progress: false
@@ -56,6 +56,7 @@ jobs:
   deploy:
     needs: validate
     runs-on: ubuntu-latest
+    environment: production
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
@@ -73,13 +74,46 @@ jobs:
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Sync repository to the VPS (rsync, keeps .env)
+      - name: Sync repository to the VPS (keeps the rendered .env)
         run: |
           rsync -az --delete \
             --exclude '.git' --exclude 'node_modules' --exclude '.env' \
             --exclude 'backups' --exclude 'dist' \
             -e "ssh -i ~/.ssh/id_deploy -p $VPS_PORT" \
             ./ "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/"
+
+      - name: Render .env on the VPS from the production Environment
+        env:
+          DOMAIN: ${{ vars.DOMAIN }}
+          N8N_IMAGE_TAG: ${{ vars.N8N_IMAGE_TAG }}
+          PROXY_NETWORK: ${{ vars.PROXY_NETWORK }}
+          CALENDAR_ID: ${{ vars.CALENDAR_ID }}
+          BIRTHDAY_SYNC_SCHEDULE: ${{ vars.BIRTHDAY_SYNC_SCHEDULE }}
+          SHOW_BIRTH_YEAR: ${{ vars.SHOW_BIRTH_YEAR }}
+          GOOGLE_OAUTH_CRED_ID: ${{ vars.GOOGLE_OAUTH_CRED_ID }}
+          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          if [ -z "$DOMAIN" ] || [ -z "$N8N_ENCRYPTION_KEY" ]; then
+            echo "::error::Missing required config. Set the DOMAIN variable and the N8N_ENCRYPTION_KEY secret in the 'production' environment."
+            exit 1
+          fi
+          tmp="$(mktemp)"
+          {
+            echo "DOMAIN=$DOMAIN"
+            echo "N8N_IMAGE_TAG=${N8N_IMAGE_TAG:-2.31.4}"
+            echo "PROXY_NETWORK=${PROXY_NETWORK:-example-net}"
+            echo "N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY"
+            echo "N8N_API_KEY=$N8N_API_KEY"
+            echo "N8N_API_URL=http://127.0.0.1:5678"
+            echo "GOOGLE_OAUTH_CRED_ID=$GOOGLE_OAUTH_CRED_ID"
+            echo "CALENDAR_ID=$CALENDAR_ID"
+            echo "BIRTHDAY_SYNC_SCHEDULE=${BIRTHDAY_SYNC_SCHEDULE:-0 6 * * *}"
+            echo "SHOW_BIRTH_YEAR=${SHOW_BIRTH_YEAR:-true}"
+          } > "$tmp"
+          scp -i ~/.ssh/id_deploy -P "$VPS_PORT" "$tmp" "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/.env"
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "chmod 600 '$VPS_APP_DIR/.env'"
+          rm -f "$tmp"
 
       - name: Start stack + deploy workflows on the VPS
         run: |

@@ -25,24 +25,23 @@ Germany since 2024 for regulatory reasons.
 |-----------|--------|-----|
 | Automation engine | **n8n** (Docker, pinned tag) | Visual workflows + code where needed. |
 | Database | **SQLite** (n8n default) | Zero-ops; fine for a single-instance hub. Persisted in a Docker volume. |
-| Reverse proxy / TLS | **Caddy** | Automatic Let's Encrypt certificates, HTTP/3, tiny config. |
-| Network exposure | Only **80/443** via Caddy | n8n's port `5678` is **never** published; it stays on the internal Docker network. |
-| Config | **`.env`** (gitignored) | No secrets in the repo. |
+| Reverse proxy / TLS | **your existing `nginx-auto-ssl` proxy** | Not part of this repo; n8n joins its shared Docker network and is routed by `SITES`. |
+| Network exposure | none public; `127.0.0.1:5678` loopback only | The proxy reaches n8n over the shared network; the loopback port is only for the on-host deploy. |
+| Config | **`.env`** (rendered from GitHub Environment in CI/CD) | No secrets in the repo. |
 | Deploy | **n8n Public REST API** (`scripts/deploy.ts`) | Idempotent upsert by workflow name; CLI fallback. |
 
 ```
-Internet ──443──► Caddy ──(internal docker network)──► n8n:5678 ──► SQLite volume
-                  (TLS)                                   ▲
-                                                          │ X-N8N-API-KEY
-                                             scripts/deploy.ts (repo → n8n)
+Internet ─► your nginx-auto-ssl proxy ─(shared docker net)─► automation-hub-n8n:5678 ─► SQLite volume
+             (TLS, SITES routing)                                 ▲
+                                              127.0.0.1:5678 ──────┤ X-N8N-API-KEY
+                                              scripts/deploy.ts (repo → n8n)
 ```
 
 ## Repository layout
 
 ```
 automation-hub/
-├── docker-compose.yml         # n8n (SQLite) + Caddy (TLS), n8n not exposed
-├── Caddyfile                  # {$DOMAIN} { reverse_proxy n8n:5678 }
+├── docker-compose.yml         # n8n (SQLite), joins your reverse proxy's network
 ├── .env.example               # every variable, documented (copy to .env)
 ├── package.json               # deploy / backup / validate / sync / test scripts
 ├── scripts/
@@ -76,9 +75,9 @@ cp .env.example .env
 nano .env                       # set DOMAIN, N8N_ENCRYPTION_KEY, CALENDAR_ID ...
 #   generate the encryption key with:  openssl rand -hex 32
 
-# 2. Start the stack (on your server, ports 80/443 open, DNS pointing at it)
+# 2. Start n8n (your reverse proxy must already run; PROXY_NETWORK must match it)
 docker compose up -d
-docker compose logs -f caddy    # watch it obtain the Let's Encrypt certificate
+docker compose logs -f n8n      # wait until healthy
 
 # 3. In the browser: create the n8n owner account at https://<your-domain>,
 #    create the Google OAuth2 credential, generate an n8n API key.
@@ -137,13 +136,16 @@ secrets, promoting `main` — is in **[docs/ci-cd.md](docs/ci-cd.md)**.
 - **Upsert by name, not by database id.** The n8n Public API assigns its own ids,
   so `deploy.ts` matches on the stable workflow `name` — repeated deploys never
   create duplicates.
-- **Pinned image tags.** `N8N_IMAGE_TAG` / `CADDY_IMAGE_TAG` are pinned in `.env`
-  for reproducibility; bump them deliberately and re-deploy.
+- **Pinned image tag.** `N8N_IMAGE_TAG` is pinned in `.env` for reproducibility;
+  bump it deliberately and re-deploy.
+- **No bundled proxy.** TLS/routing is delegated to your existing
+  `nginx-auto-ssl` reverse proxy; n8n just joins its `PROXY_NETWORK`.
 
 ## Security notes
 
 - The real `.env`, `*.sqlite`, and `backups/` are gitignored. **Never commit secrets.**
-- n8n is not reachable except through Caddy over HTTPS.
+- n8n is not exposed publicly; only your reverse proxy reaches it (shared Docker
+  network), plus a `127.0.0.1` loopback port for the on-host deploy script.
 - `N8N_ENCRYPTION_KEY` encrypts stored credentials at rest — set it once and keep
   it safe; losing or changing it makes existing credentials unreadable.
 - `validate.yml` needs no secrets. `deploy.yml` uses only an SSH deploy key

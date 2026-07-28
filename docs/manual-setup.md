@@ -1,5 +1,10 @@
 # Manual setup guide
 
+> **Using CI/CD + your existing reverse proxy?** Follow **[ci-cd.md](ci-cd.md)** —
+> it supersedes the `docker compose up` / `.env` / TLS steps below. This repo
+> ships **no** proxy: your `nginx-auto-ssl` handles TLS and routing, so n8n needs
+> no 80/443 of its own. Where this guide says "Caddy", read "your reverse proxy".
+
 Everything you must do by hand to get `automation-hub` running and the
 `birthday-sync` workflow live. Steps that **cannot** be automated (browser OAuth
 consent, DNS, API-key generation) are marked 🔴.
