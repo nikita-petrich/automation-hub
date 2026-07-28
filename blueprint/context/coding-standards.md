@@ -10,8 +10,12 @@
   you need `extendedProperties` / custom filtering.
 - **Idempotency is mandatory** for anything that writes data: dedup by a stable external id
   in `extendedProperties.private` + a content signature; decide create / update / skip.
-- Read runtime config via `$env.*` (passed into the container) — don't hardcode calendar
-  ids, schedules, etc.
+- **Never read `$env` in a workflow** — the container runs with
+  `N8N_BLOCK_ENV_ACCESS_IN_NODE=true` so that no node can read `N8N_ENCRYPTION_KEY` (and
+  with it decrypt the stored Google credentials). `npm run validate` rejects any node
+  that mentions `$env`. Don't hardcode calendar ids or schedules either: put runtime
+  config in a `// CONFIG:START` / `// CONFIG:END` region (or a placeholder like
+  `REPLACE_WITH_CALENDAR_ID`) and inject it at deploy time in `scripts/deploy.ts`.
 
 ## Shared logic (`lib/`)
 
@@ -22,9 +26,12 @@
 
 ## Deploy / tooling (`scripts/`)
 
-- `deploy.ts` upserts by name via the n8n API, injects lib + schedule + credential id, and
-  activates. Keep it idempotent. Never publish n8n's port beyond `127.0.0.1`. Never add a
-  bundled proxy.
+- `deploy.ts` upserts by name via the n8n API, injects lib + schedule + runtime config +
+  credential id, and activates. Keep it idempotent. Never publish n8n's port beyond
+  `127.0.0.1`. Never add a bundled proxy.
+- New runtime config belongs here, not in the container's `environment:`. Read it from
+  `process.env` in `deploy.ts` and bake it into the workflow; add it to the
+  *Deploy workflows into n8n* step in `.github/workflows/deploy.yml` so the runner has it.
 
 ## Validation (always, before commit)
 

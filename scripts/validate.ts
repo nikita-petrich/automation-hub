@@ -11,8 +11,9 @@
  *   3. Each node has id/name/type/typeVersion/position/parameters.
  *   4. Every connection references an existing node.
  *   5. Every credential-bearing node references a credential.
- *   6. The Code node's LIB region matches lib/calendar-upsert.js (no drift).
- *   7. The Code node body is syntactically valid JavaScript.
+ *   6. No node reads `$env` (the container blocks env access — see below).
+ *   7. The Code node's LIB region matches lib/calendar-upsert.js (no drift).
+ *   8. The Code node body is syntactically valid JavaScript.
  *
  * NO deploy, NO secrets, NO network — safe to run anywhere.
  */
@@ -121,6 +122,22 @@ function validateWorkflow(dir: string, libRegion: string): void {
           if (!nodeNames.has(link.node)) problems.push(`${label}: connection targets unknown node "${link.node}"`);
         }
       }
+    }
+  }
+
+  // --- no $env anywhere ---
+  // docker-compose.yml runs n8n with N8N_BLOCK_ENV_ACCESS_IN_NODE=true, so that a
+  // workflow can never read N8N_ENCRYPTION_KEY out of the process env. A node that
+  // reads $env would therefore fail at runtime — and asking for the flag to be
+  // loosened again would hand every workflow author the key to the stored Google
+  // credentials. Runtime config is injected at deploy time by scripts/deploy.ts.
+  for (const node of wf.nodes) {
+    if (JSON.stringify(node.parameters ?? {}).includes('$env')) {
+      problems.push(
+        `${label}: node "${node.name}" mentions $env — env access is blocked in nodes; ` +
+          `inject the value at deploy time in scripts/deploy.ts instead ` +
+          `(this is a plain text match, so reword a comment that just names it)`
+      );
     }
   }
 

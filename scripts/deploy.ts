@@ -8,17 +8,25 @@
  * What it does for every workflows/<name>/workflow.json:
  *   1. Re-injects lib/calendar-upsert.js into the Code node (single source).
  *   2. Injects BIRTHDAY_SYNC_SCHEDULE into the Schedule Trigger.
- *   3. Wires GOOGLE_OAUTH_CRED_ID into every HTTP Request node (if provided).
- *   4. UPSERTS by stable workflow NAME via the n8n Public REST API
+ *   3. Injects CALENDAR_ID + SHOW_BIRTH_YEAR into the Code node and the
+ *      Calendar URLs.
+ *   4. Wires GOOGLE_OAUTH_CRED_ID into every HTTP Request node (if provided).
+ *   5. UPSERTS by stable workflow NAME via the n8n Public REST API
  *      (create if absent, replace if present) — so repeated runs never
  *      create duplicates.
- *   5. Activates/deactivates according to the workflow's `active` flag.
+ *   6. Activates/deactivates according to the workflow's `active` flag.
+ *
+ * Step 3 is what keeps `$env` out of the workflow entirely: runtime config is
+ * baked in HERE, at deploy time, so the container can run with
+ * N8N_BLOCK_ENV_ACCESS_IN_NODE=true and no Code node can read
+ * N8N_ENCRYPTION_KEY. Never reintroduce `$env.*` in a workflow — CI rejects it.
  *
  * If the Public API is unreachable it falls back to `n8n import:workflow`
  * executed inside the container via `docker compose exec`.
  *
- * Requires (from .env): N8N_API_URL, N8N_API_KEY.
- * Optional (from .env): BIRTHDAY_SYNC_SCHEDULE, GOOGLE_OAUTH_CRED_ID.
+ * Requires (from .env): N8N_API_URL, N8N_API_KEY, CALENDAR_ID.
+ * Optional (from .env): BIRTHDAY_SYNC_SCHEDULE, SHOW_BIRTH_YEAR,
+ * GOOGLE_OAUTH_CRED_ID.
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
@@ -30,6 +38,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOWS_DIR = join(ROOT, 'workflows');
 const LIB_FILE = join(ROOT, 'lib', 'calendar-upsert.js');
 const CRED_PLACEHOLDER = 'REPLACE_WITH_CRED_ID';
+const CALENDAR_PLACEHOLDER = 'REPLACE_WITH_CALENDAR_ID';
 
 // ---------------------------------------------------------------------------
 // .env loading (no dependency): KEY=VALUE, value = rest of line, quotes stripped.
@@ -66,6 +75,34 @@ function injectLibRegion(jsCode: string, libRegion: string): string {
   return [...lines.slice(0, start + 1), ...libRegion.split('\n'), ...lines.slice(end)].join('\n');
 }
 
+/** Everything that gets baked into a workflow at deploy time. */
+interface Config {
+  libRegion: string;
+  calendarId: string;
+  showBirthYear: boolean;
+  schedule?: string;
+  credId?: string;
+}
+
+/**
+ * Replace the CONFIG:START/CONFIG:END region of a Code node with the real
+ * runtime configuration. Same mechanic as injectLibRegion — workflow.json only
+ * ever carries inert defaults, and the values are baked in here instead of
+ * being read from `$env` inside n8n.
+ */
+function injectConfigRegion(jsCode: string, cfg: Config): string {
+  const lines = jsCode.split('\n');
+  const start = lines.findIndex((l) => l.trim() === '// CONFIG:START');
+  const end = lines.findIndex((l) => l.trim() === '// CONFIG:END');
+  if (start === -1 || end === -1) return jsCode; // no markers -> leave as-is
+  const region = [
+    // JSON.stringify produces a correctly escaped JS string literal.
+    `const CALENDAR_ID = ${JSON.stringify(cfg.calendarId)};`,
+    `const showBirthYear = ${cfg.showBirthYear};`,
+  ];
+  return [...lines.slice(0, start + 1), ...region, ...lines.slice(end)].join('\n');
+}
+
 interface Built {
   name: string;
   active: boolean;
@@ -74,23 +111,29 @@ interface Built {
 }
 
 /** Read a workflow.json and apply all deploy-time injections. */
-function buildWorkflow(dir: string, libRegion: string, schedule: string | undefined, credId: string | undefined): Built {
+function buildWorkflow(dir: string, cfg: Config): Built {
   const wf = JSON.parse(readFileSync(join(WORKFLOWS_DIR, dir, 'workflow.json'), 'utf8'));
   let credentialsWired = true;
 
   for (const node of wf.nodes as any[]) {
-    // 1. lib injection
+    // 1. lib + runtime-config injection
     if (node.type === 'n8n-nodes-base.code' && typeof node.parameters?.jsCode === 'string') {
-      node.parameters.jsCode = injectLibRegion(node.parameters.jsCode, libRegion);
+      node.parameters.jsCode = injectLibRegion(node.parameters.jsCode, cfg.libRegion);
+      node.parameters.jsCode = injectConfigRegion(node.parameters.jsCode, cfg);
     }
     // 2. schedule injection
-    if (node.type === 'n8n-nodes-base.scheduleTrigger' && schedule) {
+    if (node.type === 'n8n-nodes-base.scheduleTrigger' && cfg.schedule) {
       node.parameters = node.parameters ?? {};
-      node.parameters.rule = { interval: [{ field: 'cronExpression', expression: schedule }] };
+      node.parameters.rule = { interval: [{ field: 'cronExpression', expression: cfg.schedule }] };
     }
-    // 3. credential wiring
+    // 3. calendar id into request URLs (encodeURIComponent output never contains
+    //    `$`, so it is safe as a replaceAll replacement string)
+    if (typeof node.parameters?.url === 'string') {
+      node.parameters.url = node.parameters.url.replaceAll(CALENDAR_PLACEHOLDER, encodeURIComponent(cfg.calendarId));
+    }
+    // 4. credential wiring
     if (node.type === 'n8n-nodes-base.httpRequest' && node.credentials?.oAuth2Api) {
-      if (credId) node.credentials.oAuth2Api.id = credId;
+      if (cfg.credId) node.credentials.oAuth2Api.id = cfg.credId;
       if (!node.credentials.oAuth2Api.id || node.credentials.oAuth2Api.id === CRED_PLACEHOLDER) {
         credentialsWired = false;
       }
@@ -224,9 +267,19 @@ async function main(): Promise<void> {
   const apiKey = process.env.N8N_API_KEY;
   const schedule = process.env.BIRTHDAY_SYNC_SCHEDULE?.trim();
   const credId = process.env.GOOGLE_OAUTH_CRED_ID?.trim() || undefined;
+  const calendarId = process.env.CALENDAR_ID?.trim();
+  // An unset GitHub secret arrives as "" (not undefined), so fall back on empty.
+  const showBirthYear = (process.env.SHOW_BIRTH_YEAR?.trim() || 'true').toLowerCase() === 'true';
 
   if (!apiUrl || !apiKey) {
     console.error('Missing N8N_API_URL and/or N8N_API_KEY. Fill them in .env (see .env.example).');
+    process.exit(1);
+  }
+  if (!calendarId) {
+    console.error(
+      'Missing CALENDAR_ID. It is baked into the workflow at deploy time (nodes no longer read $env),\n' +
+        'so the deploy cannot proceed without it. Set it in the GitHub "production" environment or in .env.'
+    );
     process.exit(1);
   }
 
@@ -240,7 +293,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const built = dirs.map((d) => buildWorkflow(d, libRegion, schedule, credId));
+  const built = dirs.map((d) => buildWorkflow(d, { libRegion, calendarId, showBirthYear, schedule, credId }));
   console.log(`Deploying ${built.length} workflow(s) to ${apiUrl}`);
   if (!credId) console.log('(GOOGLE_OAUTH_CRED_ID not set — HTTP nodes will need their credential selected in the UI.)\n');
 
