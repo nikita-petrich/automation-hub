@@ -37,7 +37,6 @@ import { execFileSync } from 'node:child_process';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOWS_DIR = join(ROOT, 'workflows');
 const LIB_FILE = join(ROOT, 'lib', 'calendar-upsert.js');
-const CRED_PLACEHOLDER = 'REPLACE_WITH_CRED_ID';
 const CALENDAR_PLACEHOLDER = 'REPLACE_WITH_CALENDAR_ID';
 
 // ---------------------------------------------------------------------------
@@ -133,8 +132,13 @@ function buildWorkflow(dir: string, cfg: Config): Built {
     }
     // 4. credential wiring
     if (node.type === 'n8n-nodes-base.httpRequest' && node.credentials?.oAuth2Api) {
-      if (cfg.credId) node.credentials.oAuth2Api.id = cfg.credId;
-      if (!node.credentials.oAuth2Api.id || node.credentials.oAuth2Api.id === CRED_PLACEHOLDER) {
+      if (cfg.credId) {
+        node.credentials.oAuth2Api.id = cfg.credId;
+      } else {
+        // No credential id yet: ship NO credentials block rather than the
+        // dangling REPLACE_WITH_CRED_ID placeholder (I6). The workflow is left
+        // inactive below until a real credential is wired.
+        delete node.credentials;
         credentialsWired = false;
       }
     }

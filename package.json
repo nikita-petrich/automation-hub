@@ -12,10 +12,12 @@
     "backup": "tsx scripts/backup.ts",
     "validate": "tsx scripts/validate.ts",
     "sync": "tsx scripts/validate.ts --fix",
+    "typecheck": "tsc --noEmit",
     "test": "node --test"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

@@ -1,7 +1,7 @@
 # Continuous deployment — deploy the WHOLE stack to the VPS.
 # =============================================================================
 # On push to `main` (or manual dispatch), GitHub Actions:
-#   1. validates the workflows (safety gate),
+#   1. validates the workflows (safety gate: typecheck + validate + tests),
 #   2. copies the repo onto the VPS over SSH (tar stream),
 #   3. renders the VPS .env from the `production` Environment's secrets,
 #   4. starts the stack on the VPS (docker compose up -d via vps-deploy.sh),
@@ -18,6 +18,8 @@
 #     VPS_USER     ssh user              CALENDAR_ID    target Google calendar
 #     N8N_ENCRYPTION_KEY  openssl rand   N8N_API_KEY    n8n Public API key (step 6)
 #     GOOGLE_OAUTH_CRED_ID  n8n credential id (step 6)
+#     VPS_SSH_HOST_KEY  pinned host key (ssh-keyscan -p <port> <host>) — the deploy
+#                       FAILS without it rather than trusting an unverified key.
 #   Optional secrets (defaults): BIRTHDAY_SYNC_SCHEDULE=0 6 * * *, SHOW_BIRTH_YEAR=true,
 #     N8N_IMAGE_TAG=2.31.4, VPS_PORT=22, VPS_APP_DIR=automation-hub
 #
@@ -36,6 +38,8 @@ on:
       - "scripts/**"
       - "docker-compose.yml"
       - ".env.example"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/deploy.yml"
   workflow_dispatch: {}
 
@@ -54,13 +58,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Actions are pinned to a commit SHA (immutable); the trailing comment is
+      # the human-readable version. Dependabot bumps these (see dependabot.yml).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm run typecheck
       - run: npm run validate
+      - run: npm test # same gate as validate.yml — don't let prod deploy on a weaker check
 
   deploy:
     needs: validate
@@ -75,9 +83,9 @@ jobs:
       VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
       VPS_APP_DIR: ${{ secrets.VPS_APP_DIR || 'automation-hub' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -139,10 +147,12 @@ jobs:
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
         run: |
           if [ -z "$DOMAIN" ] || [ -z "$N8N_ENCRYPTION_KEY" ]; then
-            echo "::error::Missing required config. Set the DOMAIN variable and the N8N_ENCRYPTION_KEY secret in the 'production' environment."
+            echo "::error::Missing required config. Set the DOMAIN and N8N_ENCRYPTION_KEY secrets in the 'production' environment."
             exit 1
           fi
-          tmp="$(mktemp)"
+          # Pipe the rendered .env straight into `install -m 600` on the VPS: the
+          # file is created 0600 atomically — no world-readable window (no scp +
+          # later chmod), and no plaintext secret tempfile lingers on the runner.
           {
             echo "DOMAIN=$DOMAIN"
             echo "N8N_IMAGE_TAG=${N8N_IMAGE_TAG:-2.31.4}"
@@ -154,20 +164,43 @@ jobs:
             echo "CALENDAR_ID=$CALENDAR_ID"
             echo "BIRTHDAY_SYNC_SCHEDULE=${BIRTHDAY_SYNC_SCHEDULE:-0 6 * * *}"
             echo "SHOW_BIRTH_YEAR=${SHOW_BIRTH_YEAR:-true}"
-          } > "$tmp"
-          scp -i ~/.ssh/id_deploy -P "$VPS_PORT" "$tmp" "$VPS_USER@$VPS_HOST:$VPS_APP_DIR/.env"
-          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "chmod 600 '$VPS_APP_DIR/.env'"
-          rm -f "$tmp"
+          } | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+                "install -m 600 /dev/stdin '$VPS_APP_DIR/.env'"
 
       - name: Start stack on the VPS
         run: |
           ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "cd '$VPS_APP_DIR' && bash scripts/vps-deploy.sh"
 
+      - name: Do we have an API key?
+        id: apikey
+        env:
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          if [ -z "$N8N_API_KEY" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "N8N_API_KEY not set — n8n is up; add the secret and re-run to import workflows."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open SSH tunnel to n8n
+        if: steps.apikey.outputs.present == 'true'
+        run: |
+          # Tunnel runner:5678 -> VPS 127.0.0.1:5678 (n8n's loopback-published
+          # port), reaching the n8n API directly over SSH — independent of the
+          # public TLS cert (Node would reject an untrusted/self-signed one).
+          # A control socket makes teardown deterministic (see cleanup step).
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" \
+            -M -S ~/.ssh/n8n-tunnel.sock \
+            -o ExitOnForwardFailure=yes -f -N \
+            -L 127.0.0.1:5678:127.0.0.1:5678 "$VPS_USER@$VPS_HOST"
+
       # CALENDAR_ID and SHOW_BIRTH_YEAR are needed HERE, on the runner: they are
       # baked into the workflow by scripts/deploy.ts instead of being read from
       # $env inside n8n, so the container can block env access to the nodes.
-      - name: Deploy workflows into n8n (via SSH tunnel to the VPS)
+      - name: Deploy workflows into n8n
+        if: steps.apikey.outputs.present == 'true'
         env:
           N8N_API_URL: http://127.0.0.1:5678
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
@@ -176,17 +209,11 @@ jobs:
           CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
           SHOW_BIRTH_YEAR: ${{ secrets.SHOW_BIRTH_YEAR }}
         run: |
-          if [ -z "$N8N_API_KEY" ]; then
-            echo "N8N_API_KEY not set — n8n is up; add the secret and re-run to import workflows."
-            exit 0
-          fi
-          # Tunnel runner:5678 -> VPS 127.0.0.1:5678 (n8n's loopback-published port),
-          # so we reach the n8n API directly over SSH — independent of the public
-          # TLS certificate (Node would reject an untrusted/self-signed cert).
-          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" \
-            -o ExitOnForwardFailure=yes -f -N \
-            -L 127.0.0.1:5678:127.0.0.1:5678 "$VPS_USER@$VPS_HOST"
-          # Dependencies were installed in an earlier step, before the secrets
-          # and the tunnel existed — nothing to install here.
+          # Dependencies were installed up front (before secrets/tunnel); the
+          # tunnel is already open. Just run the one-way deploy.
           npm run deploy
-          pkill -f "ssh.*-L 127.0.0.1:5678:127.0.0.1:5678" || true
+
+      - name: Close SSH tunnel
+        if: always() && steps.apikey.outputs.present == 'true'
+        run: |
+          ssh -S ~/.ssh/n8n-tunnel.sock -O exit "$VPS_USER@$VPS_HOST" 2>/dev/null || true

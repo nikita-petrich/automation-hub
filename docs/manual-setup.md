@@ -194,7 +194,10 @@ The pipeline runs. On this first run **n8n comes up**, but the workflow import i
 
 Open **`https://<your-domain>`** (your proxy now serves it):
 
-1. **Create the n8n owner account** (email + password).
+1. **Create the n8n owner account** (email + password). ⏱️ **Do this immediately
+   after the first green deploy** — until you claim it, the setup page is open and
+   whoever loads it first becomes the instance admin. Then turn on **2FA**
+   (Settings → n8n → Two-factor authentication).
 2. **Create the Google OAuth2 credential:** **Credentials → Add credential** → pick
    the **generic** entry named exactly **`OAuth2 API`** (NOT "Google OAuth2 API" or
    any "… OAuth2 API" — only the plain one lets you set custom URLs + scope). Fill:
@@ -283,6 +286,32 @@ inside n8n, not in Actions — only deploys use Actions minutes, ~1–2 min each
 
 ---
 
+## 10a. Hardening (recommended)
+
+These are operator actions on the proxy / server that the repo can't do for you.
+The container-, pipeline- and workflow-level hardening is already applied in code
+(see [security-review.md](security-review.md)).
+
+- **Lock the n8n Public API at the proxy (M2).** The deploy talks to n8n over the
+  SSH tunnel (`127.0.0.1:5678`), so nothing external needs `/api/v1`. In your
+  reverse proxy, block or IP-allowlist `/api/v1` (and rate-limit `/rest/login`) for
+  `<your-domain>`. The editor UI is unaffected.
+- **Back up the Docker volume (I1).** `npm run backup` only exports workflow JSON.
+  The **encrypted Google OAuth refresh token lives only in the `n8n_data` volume** —
+  lose the volume and you must re-authorize in the browser. Snapshot it on a cron:
+  ```bash
+  docker run --rm -v automation-hub_n8n_data:/d -v "$PWD":/b alpine \
+    tar czf /b/n8n-vol-$(date +%F).tgz /d
+  ```
+  A restore also needs `N8N_ENCRYPTION_KEY`, which exists **only** as a GitHub
+  secret (not readable back) — keep a copy in a password manager.
+- **Drift on the VPS (N5).** The deploy untars over the existing files and never
+  deletes. If you remove a `workflows/<name>/` or a script from the repo, delete the
+  stale copy on the VPS by hand (and deactivate the workflow in n8n) — the pipeline
+  won't remove it for you.
+
+---
+
 ## 11. Troubleshooting
 
 | Symptom | Fix |
@@ -292,4 +321,5 @@ inside n8n, not in Actions — only deploys use Actions minutes, ~1–2 min each
 | Sync stops after ~7 days | Consent screen still in **Testing** — publish the app (step 4.5) and reconnect. |
 | Deploy is red at "Start stack" | The SSH user isn't in the `docker` group, or the `edge` network doesn't exist. |
 | Deploy red at "Deploy workflows" | `N8N_API_KEY` missing/invalid, or n8n not healthy. Check the two secrets. |
+| SSH step fails with **"Host key verification failed"** | `VPS_SSH_HOST_KEY` doesn't match the server (host reinstalled/changed, or wrong value). Re-run `ssh-keyscan -p 22 <vps-ip>` and update the secret. |
 | Only "OAuth2 API" variants shown in n8n | Pick the **plain** `OAuth2 API` (generic), not `Google OAuth2 API`. |

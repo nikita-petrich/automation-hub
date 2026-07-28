@@ -1,7 +1,7 @@
 # Validation only — NO deploy, NO SSH, NO secrets required.
-# Parses/validates every workflow JSON, verifies the Code node is in sync with
-# lib/, and runs the lib unit tests. Deployment to n8n is a deliberate manual
-# step (scripts/deploy.ts), never done from CI.
+# Parses/validates every workflow JSON, type-checks the scripts, verifies the
+# Code node is in sync with lib/, and runs the lib unit tests. Deployment to n8n
+# is a deliberate step (scripts/deploy.ts), never done from CI.
 name: validate
 
 on:
@@ -21,9 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to a commit SHA (immutable); the trailing comment is
+      # the human-readable version. Dependabot bumps these (see dependabot.yml).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -33,6 +35,9 @@ jobs:
       # here because this job also runs on pull requests from forks.
       - name: Install dependencies
         run: npm ci --ignore-scripts
+
+      - name: Type-check the scripts
+        run: npm run typecheck
 
       - name: Validate workflows (JSON, schema, lib sync)
         run: npm run validate
