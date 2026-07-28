@@ -6,19 +6,17 @@
 #   3. renders the VPS .env from the `production` Environment's secrets/variables,
 #   4. runs scripts/vps-deploy.sh: `docker compose up -d` + `npm run deploy`.
 #
-# ALL configuration lives in the GitHub `production` Environment — you never edit
-# .env on the server by hand; the pipeline writes it from these values:
+# ALL configuration lives in the GitHub `production` Environment as SECRETS — you
+# never edit .env on the server by hand; the pipeline writes it from these:
 #
-#   Environment SECRETS (masked)          Environment VARIABLES (plain)
-#   ----------------------------          -----------------------------
-#   VPS_SSH_KEY   private deploy key       DOMAIN            n8n hostname (required)
-#   VPS_HOST      server IP/hostname       CALENDAR_ID       target calendar
-#   VPS_USER      ssh user                 GOOGLE_OAUTH_CRED_ID  n8n credential id
-#   N8N_ENCRYPTION_KEY  (openssl rand)     BIRTHDAY_SYNC_SCHEDULE  cron (optional)
-#   N8N_API_KEY   n8n Public API key       SHOW_BIRTH_YEAR   true/false (optional)
-#                                          PROXY_NETWORK  reverse-proxy net name
-#                                          N8N_IMAGE_TAG (optional)
-#                                          VPS_PORT / VPS_APP_DIR (optional)
+#   Required secrets:
+#     VPS_SSH_KEY  private deploy key    DOMAIN         n8n hostname
+#     VPS_HOST     server IP/hostname    PROXY_NETWORK  reverse-proxy network name
+#     VPS_USER     ssh user              CALENDAR_ID    target Google calendar
+#     N8N_ENCRYPTION_KEY  openssl rand   N8N_API_KEY    n8n Public API key (step 6)
+#     GOOGLE_OAUTH_CRED_ID  n8n credential id (step 6)
+#   Optional secrets (defaults): BIRTHDAY_SYNC_SCHEDULE=0 6 * * *, SHOW_BIRTH_YEAR=true,
+#     N8N_IMAGE_TAG=2.31.4, VPS_PORT=22, VPS_APP_DIR=automation-hub
 #
 # N8N_API_KEY + GOOGLE_OAUTH_CRED_ID come from the n8n UI (one-time browser step);
 # until N8N_API_KEY is set, the stack still comes up and the workflow deploy is
@@ -60,8 +58,8 @@ jobs:
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
-      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
-      VPS_APP_DIR: ${{ vars.VPS_APP_DIR || 'automation-hub' }}
+      VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      VPS_APP_DIR: ${{ secrets.VPS_APP_DIR || 'automation-hub' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,13 +82,13 @@ jobs:
 
       - name: Render .env on the VPS from the production Environment
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
-          N8N_IMAGE_TAG: ${{ vars.N8N_IMAGE_TAG }}
-          PROXY_NETWORK: ${{ vars.PROXY_NETWORK }}
-          CALENDAR_ID: ${{ vars.CALENDAR_ID }}
-          BIRTHDAY_SYNC_SCHEDULE: ${{ vars.BIRTHDAY_SYNC_SCHEDULE }}
-          SHOW_BIRTH_YEAR: ${{ vars.SHOW_BIRTH_YEAR }}
-          GOOGLE_OAUTH_CRED_ID: ${{ vars.GOOGLE_OAUTH_CRED_ID }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          N8N_IMAGE_TAG: ${{ secrets.N8N_IMAGE_TAG }}
+          PROXY_NETWORK: ${{ secrets.PROXY_NETWORK }}
+          CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
+          BIRTHDAY_SYNC_SCHEDULE: ${{ secrets.BIRTHDAY_SYNC_SCHEDULE }}
+          SHOW_BIRTH_YEAR: ${{ secrets.SHOW_BIRTH_YEAR }}
+          GOOGLE_OAUTH_CRED_ID: ${{ secrets.GOOGLE_OAUTH_CRED_ID }}
           N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
         run: |

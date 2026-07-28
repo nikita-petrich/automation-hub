@@ -6,7 +6,7 @@ Every push to **`main`** deploys the whole stack to your VPS automatically:
 push to main ─► GitHub Actions ─► validate
                                  ─► rsync repo to the VPS (over SSH)
                                  ─► render .env on the VPS from the `production`
-                                    GitHub Environment (secrets + variables)
+                                    GitHub Environment (all secrets)
                                  ─► docker compose up -d      (starts n8n)
                                     npm run deploy             (workflows → n8n)
 ```
@@ -45,27 +45,23 @@ ssh-copy-id -i ~/.ssh/automation-hub-deploy.pub <vps-user>@<vps-host>
 ```
 
 ### 4. Create the GitHub `production` Environment
-Repo → **Settings → Environments → New environment** → `production`. Add:
+Repo → **Settings → Environments → New environment** → `production`. Add
+everything as **Secrets** (Add environment secret):
 
-**Secrets** (masked):
-| Name | Value |
-|------|-------|
+| Secret | Value |
+|--------|-------|
 | `VPS_SSH_KEY` | the **private** key `~/.ssh/automation-hub-deploy` |
 | `VPS_HOST` | server IP / hostname |
 | `VPS_USER` | SSH user |
 | `N8N_ENCRYPTION_KEY` | `openssl rand -hex 32` (generate once, keep forever) |
-| `N8N_API_KEY` | *(added after step 6)* |
-
-**Variables** (plain):
-| Name | Value |
-|------|-------|
 | `DOMAIN` | your n8n hostname, e.g. `n8n.yourdomain.de` |
 | `PROXY_NETWORK` | your reverse proxy's Docker network name (e.g. `example-net`) |
 | `CALENDAR_ID` | target Google calendar id |
+| `N8N_API_KEY` | *(added after step 6)* |
 | `GOOGLE_OAUTH_CRED_ID` | *(added after step 6)* |
-| `BIRTHDAY_SYNC_SCHEDULE` | optional, default `0 6 * * *` |
-| `SHOW_BIRTH_YEAR` | optional, default `true` |
-| `N8N_IMAGE_TAG` | optional, default `2.31.4` |
+| `BIRTHDAY_SYNC_SCHEDULE` | optional (default `0 6 * * *`) |
+| `SHOW_BIRTH_YEAR` | optional (default `true`) |
+| `N8N_IMAGE_TAG` | optional (default `2.31.4`) |
 | `VPS_PORT` / `VPS_APP_DIR` | optional (defaults `22` / `automation-hub`) |
 
 ### 5. Promote `main` and first deploy

@@ -120,9 +120,9 @@ Two GitHub Actions workflows:
   + `npm run deploy` there — so both infra and workflow changes go live
   automatically. Deploys are idempotent.
 
-The n8n / Google secrets stay in the VPS-local `.env`; GitHub only stores the SSH
-deploy key (`VPS_SSH_KEY`, `VPS_HOST`, `VPS_USER`). Full setup — deploy key,
-secrets, promoting `main` — is in **[docs/ci-cd.md](docs/ci-cd.md)**.
+All configuration lives in a GitHub **`production` Environment** (as secrets); the
+pipeline renders the VPS `.env` from it on every deploy. Full setup — deploy key,
+secrets, reverse-proxy `SITES`, promoting `main` — is in **[docs/ci-cd.md](docs/ci-cd.md)**.
 
 ## Design decisions worth knowing
 
